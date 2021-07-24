@@ -2821,11 +2821,7 @@ Left True :: Either Bool b
 data List a = Empty | Cons a (List a) deriving (Show, Read, Eq, Ord)
 ```
 
-
-
 读起来好像我们前一段提及的定义。他要么是空的 List，或是一个元素跟一串 List 的结合。如果你被搞混了，看看用 record syntax 定义的可能比较清楚。
-
-
 
 ```
 data List a = Empty | Cons { listHead :: a, listTail :: List a} deriving (Show, Read, Eq, Ord)
@@ -2884,31 +2880,255 @@ treeElem x (Node a left right)
     | x > a  = treeElem x right
 ```
 
+##### Typeclasses 范型
 
+来快速复习一下什么是 typeclass: typeclass 就像是 interface。一个 typeclass 定义了一些行为(像是比较相不相等，比较大小顺序，能否穷举)而我们会把希望满足这些性质的型别定义成这些 typeclass 的 instance。typeclass 的行为是由定义的函数来描述。并写出对应的实作。当我们把一个型别定义成某个 typeclass 的 instance，就表示我们可以对那个型别使用 typeclass 中定义的函数。
 
+######  `Prelude` 之中 `Eq`  的定义
 
+`Eq` 这个 typeclass 是描述可以比较相等的事物。他定义了 `==` 跟 `/=` 两个函数。
 
+```haskell
+class Eq a where
+    (==) :: a -> a -> Bool
+    (/=) :: a -> a -> Bool
+    x == y = not (x /= y)
+    x /= y = not (x == y)
+```
 
+`class Eq a where`，那代表我们定义了一个新的 typeclass 叫做 `Eq`。`a` 是一个型别变量，他代表 `a` 是任何我们在定义 instance 时的型别。
 
+然后我们又定义了几个函数。我们并不一定要实作函数的本体，不过必须要写出函数的型别宣告。
 
+总之我们实作了 `Eq` 中需要定义的函数本体，只是我们定义他的方式是用交互递归的形式。我们描述两个 `Eq` 的 instance 要相等，那他们就不能不一样，而他们如果不一样，那他们就是不相等。我们其实不必这样写，但很快你会看到这其实是有用的。
 
+###### instance
 
+来看看下面这个型别：
 
+```haskell
+data TrafficLight = Red | Yellow | Green
+```
 
+这里定义了红绿灯的状态。请注意这个型别并不是任何 class 的 instance，虽然可以透过 derive 让它成为 `Eq` 或 `Show` 的 instance，但我们打算手工打造。下面展示了如何让一个型别成为 `Eq` 的 instance：
 
+```haskell
+instance Eq TrafficLight where
+    Red == Red = True
+    Green == Green = True
+    Yellow == Yellow = True
+    _ == _ = False
+```
 
+我们使用了 `instance` 这个关键字。class 是用来定义新的 typeclass，而 instance 是用来说明我们要定义某个 typeclass 的 instance。当我们要定义 `Eq`，我们会写 `class Eq a where`，其中 `a` 代表任何型态。我们可以从 instance 的写法：`instance Eq TrafficLight where` 看出来。我们会把 `a` 换成实际的型别。
 
+由于 `==` 是用 `/=` 来定义的，同样的 `/=` 也是用 `==` 来定义。所以我们只需要在 instance 定义中复写其中一个就好了。我们这样叫做定义了一个 minimal complete definition。这是说能让型别符合 class 行为所最小需要实作的函数数量。而 `Eq` 的 minimal complete definition 需要 `==` 或 `/=` 其中一个。而如果 `Eq` 是这样定义的：
 
+```
+class Eq a where
+    (==) :: a -> a -> Bool
+    (/=) :: a -> a -> Bool
+```
 
+当我们定义 instance 的时候必须要两个函数都实作，因为 Haskell 并不知道这两个函数是怎么关联在一起的。所以 minimal complete definition 在这边是 `==` 跟 `/=`。
 
+你可以看到我们是用模式匹配来实作 `==`。由于不相等的情况比较多，所以我们只写出相等的，最后再用一个 `case` 接住说你不在前面相等的 `case` 的话，那就是不相等。
 
+###### show de instance
 
+我们再来写 `Show` 的 instance。要满足 `Show` 的 minimal complete definition，我们必须实作 `show` 函数，他接受一个值并把他转成字串。
 
+```
+instance Show TrafficLight where
+    show Red = "Red light"
+    show Yellow = "Yellow light"
+    show Green = "Green light"
+```
 
+再一次地，我们用模式匹配来完成我们的任务。我们来看看他是如何运作的。
 
+```
+ghci> Red == Red
+True
+ghci> Red == Yellow
+False
+ghci> Red `elem` [Red, Yellow, Green]
+True
+ghci> [Red, Yellow, Green]
+[Red light,Yellow light,Green light]
+```
 
+如果我们用 `derive` 来自动产生 `Eq` 的话，效果是一样的。不过用 `derive` 来产生 `show` 的话，他会把值构造子转换成字串。但我们这边要的不太一样，我们希望印出像 `"Red light"` 这样的字串，所以我们就必须手动来写出 instance。
 
+###### typeclass 的 subclass
 
+> typeclass —> sub typeclass 可以理解为继承关系
+
+你也可以把 typeclass 定义成其他 typeclass 的 subclass。像是 `Num` 的 class 宣告就有点冗长，但我们先看个雏型。
+
+```
+class (Eq a) => Num a where
+   ...
+```
+
+正如我们先前提到的，我们可以在很多地方加上 class constraints。这不过就是在 `class Num a where` 中的 `a` 上，加上他必须要是 `Eq` 的 instance 的限制。这基本上就是在说我们在定义一个型别为 `Num` 之前，必须先为他定义 `Eq` 的 instance。在某个型别可以被视作 `Number` 之前，必须先能被比较相不相等其实是蛮合理的。这就是 subclass 在做的事：帮 class declaration 加上限制。也就是说当我们定义 typeclass 中的函数本体时，我们可以缺省 `a` 是属于 `Eq`，因此能使用 `==`。
+
+###### instance 与 maybe
+
+但像是 `Maybe` 或是 List 是如何被定义成 typeclass 的 instance 呢？`Maybe` 的特别之处在于他跟 `TrafficLight` 不一样，他不是一个具体的型别。他是一个型别构造子，接受一个型别参数（像是 `Char` 之类的）而构造出一个具体的型别（像是 `Maybe Char` ）。让我们再回顾一下 `Eq` 这个 typeclass：
+
+```
+class Eq a where
+    (==) :: a -> a -> Bool
+    (/=) :: a -> a -> Bool
+    x == y = not (x /= y)
+    x /= y = not (x == y)
+```
+
+从型别宣告来看，可以看到 `a` 必须是一个具体型别，因为所有在函数中的型别都必须是具体型别。(你没办法写一个函数，他的型别是 `a -> Maybe`，但你可以写一个函数，他的型别是 `a -> Maybe a`，或是 `Maybe Int -> Maybe String`) 这就是为什么我们不能写成像这样：
+
+```
+instance Eq Maybe where
+    ...
+```
+
+```
+instance Eq (Maybe m) where
+    Just x == Just y = x == y // 这里的 x 和 y 不一样是 Eq 的
+    Nothing == Nothing = True
+    _ == _ = False
+```
+
+这就好像在说我们要把 `Maybe something` 这种东西全部都做成 `Eq` 的 instance。我们的确可以写成 `(Maybe something)`，但我们通常是只用一个字母，这样比较像是 Haskell 的风格。`(Maybe m)` 这边则取代了 `a` 在 `class Eq a where` 的位置。尽管 `Maybe` 不是一个具体的型别。`Maybe m` 却是。指定一个型别参数（在这边是小写的 `m`），我们说我们想要所有像是 `Maybe m` 的都成为 `Eq` 的 instance。
+
+**一个问题**
+
+我们用 `==` 来比较 `Maybe` 包含的东西，但我们并没有任何保证说 `Maybe` 装的东西可以是 `Eq`。这就是为什么我们需要修改我们的 instance 定义：
+
+```
+instance (Eq m) => Eq (Maybe m) where
+    Just x == Just y = x == y
+    Nothing == Nothing = True
+    _ == _ = False
+```
+
+这边我们必须要加上限制。在这个 instance 的宣告中，<u>我们希望所有 `Maybe m` 形式的型别都属于 `Eq`</u>，但只有当 `m` 也属于 `Eq` 的时候。这也是 Haskell 在 derive 的时候做的事。
+
+###### ::info
+
+还有一件事要确认。如果你想看看一个 typeclass 有定义哪些 instance。可以在 ghci 中输入 `:info YourTypeClass`。所以输入 `:info Num` 会告诉你这个 typeclass 定义了哪些函数，还有哪些型别属于这个 typeclass。`:info` 也可以查找型别跟型别构造子的信息。如果你输入 `:info Maybe`。他会显示 `Maybe` 所属的所有 typeclass。`:info` 也能告诉你函数的型别宣告。
+
+```
+Prelude> :info Num
+type Num :: * -> Constraint
+class Num a where
+  (+) :: a -> a -> a
+  (-) :: a -> a -> a
+  (*) :: a -> a -> a
+  negate :: a -> a
+  abs :: a -> a
+  signum :: a -> a
+  fromInteger :: Integer -> a
+  {-# MINIMAL (+), (*), abs, signum, fromInteger, (negate | (-)) #-}
+  	-- Defined in ‘GHC.Num’
+instance Num Word -- Defined in ‘GHC.Num’
+instance Num Integer -- Defined in ‘GHC.Num’
+instance Num Int -- Defined in ‘GHC.Num’
+instance Num Float -- Defined in ‘GHC.Float’
+instance Num Double -- Defined in ‘GHC.Float’
+```
+
+###### yes-no typeclass
+
+这是我们自己定义的一个 typeclass
+
+```haskell
+class YesNo a where
+    yesno :: a -> Bool
+```
+
+接下来我们来定义一些 instance。对于数字，我们会假设任何非零的数字都会被当作 `true`，而 0 则当作 `false`。
+
+```
+instance YesNo Int where
+    yesno 0 = False
+    yesno _ = True
+```
+
+空的 List (包含字串)代表 `false`，而非空的 List 则代表 `true`。
+
+```
+instance YesNo [a] where
+    yesno [] = False
+    yesno _ = True
+```
+
+留意到我们加了一个型别参数 `a` 来让整个 List 是一个具体型别，不过我们并没有对包涵在 List 中的元素的型别做任何额外假设。我们还剩下 `Bool` 可以被作为真假值，要定义他们也很容易：
+
+id
+
+```
+instance YesNo Bool where
+    yesno = id
+```
+
+你说 `id` 是什么？他不过是标准函式库中的一个函数，他接受一个参数并回传相同的东西。
+
+我们也让 `Maybe a` 成为 `YesNo` 的 instance。
+
+```
+instance YesNo (Maybe a) where
+    yesno (Just _) = True
+    yesno Nothing = False
+```
+
+由于我们不必对 `Maybe` 的内容做任何假设，因此并不需要 class constraint。我们只要定义遇到 `Just` 包装过的值就代表 true，而 `Nothing` 则代表 false。这里还是得写出 `(Maybe a)` 而不是只有 `Maybe`，毕竟 `Maybe -> Bool` 的函式并不存在（因为 `Maybe` 并不是具体型别），而 `Maybe a -> Bool` 看起来就合理多了。现在有了这个定义，`Maybe something` 型式的型别都属于 `YesNo` 了，不论 `something` 是什么。
+
+现在我们定义了许多 instance，来试着跑跑看！
+
+```
+ghci> yesno $ length []
+False
+ghci> yesno "haha"
+True
+ghci> yesno ""
+False
+ghci> yesno $ Just 0
+True
+ghci> yesno True
+True
+ghci> yesno EmptyTree
+False
+ghci> yesno []
+False
+ghci> yesno [0,0,0]
+True
+ghci> :t yesno
+yesno :: (YesNo a) => a -> Bool
+```
+
+很好，统统是我们预期的结果。我们来写一个函数来模仿 if statement 的行为，但他是运作在 `YesNo` 的型别上。
+
+```
+yesnoIf :: (YesNo y) => y -> a -> a -> a
+yesnoIf yesnoVal yesResult noResult =
+    if yesno yesnoVal then yesResult else noResult
+```
+
+很直觉吧！他接受一个 yes or no 的值还有两个部份，如果值是代表 "yes"，那第一个部份就会被执行，而如果值是 "no"，那第二个部份就会执行。
+
+```
+ghci> yesnoIf [] "YEAH!" "NO!"
+"NO!"
+ghci> yesnoIf [2,3,4] "YEAH!" "NO!"
+"YEAH!"
+ghci> yesnoIf True "YEAH!" "NO!"
+"YEAH!"
+ghci> yesnoIf (Just 500) "YEAH!" "NO!"
+"YEAH!"
+ghci> yesnoIf Nothing "YEAH!" "NO!"
+"NO!"
+```
 
 
 
