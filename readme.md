@@ -2682,8 +2682,6 @@ ghci> Just 10 :: Maybe Double
 Just 10.0
 ```
 
-
-
 ###### List
 
 其实 LIst 也用到了 type parameter
@@ -2703,8 +2701,6 @@ data (Ord k) => Map k v = ...
 ###### 型别构造子 && 值构造子
 
 我们实现个表示三维矢量的型别，再给它加几个处理函数。我么那就给它个型别参数，虽然大多数情况都是数值型，不过这一来它就支持了多种数值型别。
-
-
 
 ```
 data Vector a = Vector a a a deriving (Show)
@@ -3130,11 +3126,246 @@ ghci> yesnoIf Nothing "YEAH!" "NO!"
 "NO!"
 ```
 
+###### Functor
 
+`Functor` 是 Haskell 里面的一个 typeclass，它代表可以被 map over 的事物。听到这个词你可能会联想到 List，因为 map over list 在 Haskell 中是很常见的操作。你没想错，List 的确是属于 `Functor` 这个 typeclass。
 
+来看看他的实作会是了解 `Functor` 的最佳方式：
 
+```
+class Functor f where
+    fmap :: (a -> b) -> f a -> f b
+```
 
+我们看到他定义了一个函数 `fmap`，而且并没有提供一个缺省的实作。
 
+到目前为止的我们看过的 typeclass 中的型别变量都是具体型别。就像是 `(==) :: (Eq a) => a -> a -> Bool` 中的 `a` 一样。
+
+但现在碰到的 `f` 并不是一个具体型别（一个像是 `Int`, `Bool` 或 `Maybe String`的型别），<u>而是接受一个型别参数的型别构造子</u>。
+
+如果要快速回顾的话可以看一下 `Maybe Int` 是一个具体型别，而 `Maybe` 是一个型别构造子，可接受一个型别作为参数。
+
+总之，我们知道 `fmap` 接受一个函数，这个函数从一个型别映射到另一个型别，还接受一个 functor 装有原始的型别，然后会回传一个 functor 装有映射后的型别。
+
+不过这边 `fmap` 的型别宣告让我们想起类似的东西，就是 `map :: (a -> b) -> [a] -> [b]`。
+
+他接受一个函数，这函数把一个型别的东西映射成另一个。还有一串装有某个型别的 List 变成装有另一个型别的 List。到这边听起来实在太像 functor 了。实际上，`map` 就是针对 List 的 `fmap`。来看看 List 是如何被定义成 `Functor` 的 instance 的。
+
+```
+instance Functor [] where
+    fmap = map
+```
+
+注意到我们不是写成 `instance Functor [a] where`，因为从 `fmap :: (a -> b) -> f a -> f b` 可以知道 `f` 是一个型别构造子，他接受一个型别。而 `[a]` 则已经是一个具体型别（一个拥有某个型别的 List），其中 `[]` 是一个型别构造子，能接受某个型别而构造出像 `[Int]`、`[String]` 甚至是 `[[String]]` 的具体型别。
+
+对于 List，`fmap` 只不过是 `map`，对 List 操作的时候他们都是一样的。
+
+```
+map :: (a -> b) -> [a] -> [b]
+ghci> fmap (*2) [1..3]
+[2,4,6]
+ghci> map (*2) [1..3]
+[2,4,6]
+```
+
+至于当我们对空的 List 操作 `map` 或 `fmap` 呢？我们会得到一个空的 List。他把一个型别为 `[a]` 的空的 List 转成型别为 `[b]` 的空的 List。
+
+看看 `Maybe` 作为一个 functor 的定义：
+
+```
+instance Functor Maybe where
+    fmap f (Just x) = Just (f x)
+    fmap f Nothing = Nothing
+```
+
+注意到我们是写 `instance Functor Maybe where` 而不是 `instance Functor (Maybe m) where`，就像我们在写 `YesNo` 时的 `Maybe` 一样。`Functor` 要的是一个接受一个型别参数的型别构造子而不是一个具体型别。如果你把 `f` 代换成 `Maybe`。`fmap` 就会像 `(a -> b) -> Maybe a -> Maybe b`。但如果你把 `f` 代换成 `(Maybe m)`，那他就会像 `(a -> b) -> Maybe m a -> Maybe m b`，这看起来并不合理，因为 `Maybe` 只接受一个型别参数。
+
+总之，`fmap` 的实作是很简单的。如果一个空值是 `Nothing`，那他就会回传 `Nothing`。如果我们 map over 一个空的盒子，我们就会得到一个空的盒子。就像我们 map over 一个空的 List，那我们就会得到一个空的 List。如果他不是一个空值，而是包在 `Just` 中的某个值，那我们就会套用在包在 `Just` 中的值。
+
+```
+ghci> fmap (++ " HEY GUYS IM INSIDE THE JUST") (Just "Something serious.")
+Just "Something serious. HEY GUYS IM INSIDE THE JUST"
+ghci> fmap (++ " HEY GUYS IM INSIDE THE JUST") Nothing
+Nothing
+ghci> fmap (*2) (Just 200)
+Just 400
+ghci> fmap (*2) Nothing
+Nothing
+```
+
+另外 `Tree a` 的型别也可以被 map over 且被定义成 `Functor` 的一个 instance。 `Tree` 的型别构造子也刚好接受单一一个型别参数。如果你把 `fmap` 看作是一个特别为 `Tree` 写的函数，他的型别宣告会长得像这样 `(a -> b) -> Tree a -> Tree b`。不过我们在这边会用到递归。map over 一棵空的树会得到一棵空的树。map over 一棵非空的树会得到一棵被函数映射过的树，他的 root 会先被映射，然后左右子树都分别递归地被函数映射。
+
+```
+instance Functor Tree where
+    fmap f EmptyTree = EmptyTree
+    fmap f (Node x leftsub rightsub) =
+        Node (f x) (fmap f leftsub) (fmap f rightsub)
+```
+
+```
+ghci> fmap (*2) EmptyTree
+EmptyTree
+ghci> fmap (*4) (foldr treeInsert EmptyTree [5,7,3,2,1,7])
+Node 28 (Node 4 EmptyTree (Node 8 EmptyTree (Node 12 EmptyTree (Node 20 EmptyTree EmptyTree)))) EmptyTree
+```
+
+那 `Either a b` 又如何？他可以是一个 functor 吗？`Functor` 限制型别构造子只能接受一个型别参数，但 `Either` 却接受两个。聪明的你会想到我可以 partial apply `Either`，先喂给他一个参数，并把另一个参数当作 free parameter。来看看 `Either a` 在标准函式库中是如何被定义的：
+
+```
+instance Functor (Either a) where
+    fmap f (Right x) = Right (f x)
+    fmap f (Left x) = Left x
+```
+
+我们在这边做了些什么？你可以看到我们把 `Either a` 定义成一个 instance，而不是 `Either`。那是因为 `Either a` 是一个接受单一型别参数的型别构造子，而 `Either` 则接受两个。如果 `fmap` 是针对 `Either a`，那他的型别宣告就会像是 `(b -> c) -> Either a b -> Either a c`，他又等价于 `(b -> c) -> (Either a) b -> (Either a) c`。在实作中，我们碰到一个 `Right` 的时候会做 `map`，但在碰到 `Left` 的时候却不这样做，为什么呢？如果我们回头看看 `Either a b` 是怎么定义的：
+
+```
+data Either a b = Left a | Right b
+```
+
+如果我们希望对他们两个都做 `map` 的动作，那 `a` 跟 `b` 必须要是相同的型别。也就是说，如果我们的函数是接受一个字串然后回传另一个字串，而且 `b` 是字串，`a` 是数字，这样的情形是不可行的。而且从观察 `fmap` 的型别也可以知道，当他运作在 `Either` 上的时候，第一个型别参数必须固定，而第二个则可以改变，而其中第一个参数正好就是 `Left` 用的。
+
+我们持续用盒子的比喻也仍然贴切，我们可以把 `Left` 想做是空的盒子在他旁边写上错误消息，说明为什么他是空的。
+
+在 `Data.Map` 中的 Map 也可以被定义成 functor，像是 `Map k v` 的情况下，`fmap` 可以用 `v -> v'` 这样一个函数来 map over `Map k v`，并回传 `Map k v'`。
+
+注意到 `'` 在这边并没有特别的意思，他只是用来表示他跟另一个东西有点像，只有一点点差别而已。
+
+###### Kind :t
+
+型别构造子接受其他型别作为他的参数，来构造出一个具体型别。这样的行为会让我们想到函数，也是接受一个值当作参数，并回传另一个值。我们也看过型别构造子可以 partially apply （`Either String` 是一个型别构造子，他接受一个型别来构造出一个具体型别，就像 `Either String Int`）。
+
+像是 `3`,`"YEAH"` 或是 `takeWhile` 的值他们都有自己的型别（函数也是值的一种，我们可以把他们传来传去）型别是一个标签，值会把他带着，这样我们就可以推测出他的性质。但型别也有他们自己的标签，叫做 kind，kind 是<u>型别的型别</u>。虽然听起来有点玄妙，不过他的确是个有趣的概念。
+
+那kind可以拿来做什么呢？我们可以在 ghci 中用 `:k` 来得知一个型别的 kind。
+
+```
+ghci> :k Int
+Int :: *
+```
+
+一个 `*` 代表这个型别是<u>具体型别</u>。一个具体型别是没有任何型别参数，而值只能属于具体型别。而 `*` 的读法叫做 star 或是 type。
+
+我们再看看 `Maybe` 的 kind：
+
+```
+ghci> :k Maybe
+Maybe :: * -> *
+```
+
+`Maybe` 的型别构造子接受一个具体型别（像是 `Int`）然后回传一个具体型别，像是 `Maybe Int`。这就是 kind 告诉我们的信息。就像 `Int -> Int` 代表这个函数接受 `Int` 并回传一个 `Int`。`* -> *` 代表这个型别构造子接受一个具体型别并回传一个具体型别。我们再来对 `Maybe` 套用型别参数后再看看他的 kind 是什么：
+
+```
+ghci> :k Maybe Int
+Maybe Int :: *
+```
+
+正如我们预期的。我们对 `Maybe` 套用了型别参数后会得到一个具体型别（这就是 `* -> *` 的意思）这跟 `:t isUpper` 还有 `:t isUpper 'A'` 的差别有点类似。`isUpper` 的型别是 `Char -> Bool` 而 `isUpper 'A'` 的型别是 `Bool`。而这两种型别，都是 `*` 的 kind。
+
+我们对一个型别使用 `:k` 来得到他的 kind。就像我们对值使用 `:t` 来得到的他的型别一样。就像我们先前说的，型别是值的标签，而 kind 是型别的标签。
+
+我们再来看看其他的 kind
+
+```
+ghci> :k Either
+Either :: * -> * -> *
+```
+
+这告诉我们 `Either` 接受两个具体型别作为参数，并构造出一个具体型别。他看起来也像是一个接受两个参数并回传值的函数型别。型别构造子是可以做 curry 的，所以我们也能 partially apply。
+
+```
+ghci> :k Either String
+Either String :: * -> *
+ghci> :k Either String Int
+Either String Int :: *
+```
+
+当我们希望定义 `Either` 成为 `Functor` 的 instance 的时候，我们必须先 partial apply，因为 `Functor` 预期有一个型别参数，但 `Either` 却有两个。也就是说，`Functor` 希望型别的 kind 是 `* -> *`，而我们必须先 partial apply `Either` 来得到 kind `* -> *`，而不是最开始的 `* -> * -> *`。我们再来看看 `Functor` 的定义
+
+```
+class Functor f where
+    fmap :: (a -> b) -> f a -> f b
+```
+
+我们看到 `f` 型别变量是接受一个具体型别且构造出一个具体型别的型别。 知道他构造出具体型别是因为是作为函数参数的型别。 从那里我们可以推测出一个型别要是属于 `Functor` 必须是 `* -> *` kind。
+
+现在我们来练习一下。来看看下面这个新定义的 typeclass。
+
+```
+class Tofu t where
+    tofu :: j a -> t a j
+```
+
+```
+tofu :: j a
+```
+
+由于 `j a` 被当作 `tofu` 这个函数的参数的型别，所以 `j a` 一定是 `*` kind。我们假设 `a` 是 `*` kind，那 `j` 就会是 `* -> *` 的 kind 。
+
+```
+tofu :: j a -> t a j
+```
+
+而知道 `a` 是 `*`，`j` 是 `* -> *`，我们可以推测出 `t`是`* -> (* -> *) -> *`。也就是说他接受一个具体型别 `a`，一个接受单一参数的型别构造子 `j`，然后产生出一个具体型别。
+
+我们再来定义出一个型别具有 `* -> (* -> *) -> *` 的 kind，下面是一种定义的方法：
+
+```
+data Frank a b  = Frank {frankField :: b a} deriving (Show)
+```
+
+```
+frankField :: b a // b a 的结果就是 frankField 这个字段的类型
+```
+
+ADT 中的字段是要来塞值的，所以他们必须是 `*` kind。我们假设 `a` 是 `*`，那 `b` 就是接受一个型别参数的 kind `* -> *`。
+
+现在我们知道 `a` 跟 `b` 的 kind 了，而他们又是 `Frank` 的型别参数，所以我们知道 `Frank` 会有 `* -> (* -> *) -> *` 的 kind。第一个 `*` 代表 `a`，而 `(* -> *)` 代表 `b`。我们构造些 `Frank` 的值并检查他们的型别吧：
+
+```
+ghci> :t Frank {frankField = Just "HAHA"}
+Frank {frankField = Just "HAHA"} :: Frank [Char] Maybe
+ghci> :t Frank {frankField = Node 'a' EmptyTree EmptyTree}
+Frank {frankField = Node 'a' EmptyTree EmptyTree} :: Frank Char Tree
+ghci> :t Frank {frankField = "YES"}
+Frank {frankField = "YES"} :: Frank Char []
+```
+
+由于 `frankField` 具有 `a b` 的型别。他的值必定有一个类似的型别。他们可能是 `Just "HAHA"`，也就有 `Maybe [Char]` 的型别，或是他们可能是 `['Y','E','S']`，他的型别是 `[Char]`。（如果我们是用自己定义的 List 型别的话，那就会是 `List Char`）。我们看到 `Frank` 值的型别对应到 `Frank` 的 kind。`[Char]` 具有 `*` 的 kind，而 `Maybe` 则是 `* -> *`。由于结果必须是个值，也就是他必须要是具体型别，因使他必须 fully applied，因此每个 `Frank blah blaah` 的值都会是 `*` 的 kind。
+
+要把 `Frank` 定义成 `Tofu` 的 instance 也是很简单。我们看到 `tofu` 接受 `j a`（例如 `Maybe Int`）并回传 `t a j`。所以我们将 `Frank` 代入 `t`，就得到 `Frank Int Maybe`。
+
+```
+instance Tofu Frank where
+    tofu x = Frank x
+```
+
+```
+ghci> tofu (Just 'a') :: Frank Char Maybe
+Frank {frankField = Just 'a'}
+ghci> tofu ["HELLO"] :: Frank [Char] []
+Frank {frankField = ["HELLO"]}
+```
+
+这并不是很有用，但让我们做了不少型别的练习。再来看看下面的型别：
+
+###### 一个练习
+
+```
+data Barry t k p = Barry { yabba :: p, dabba :: t k }
+```
+
+```
+ghci> :k Barry
+Barry :: (* -> *) -> * -> * -> *
+```
+
+现在要把这个型别定义成 `Functor`，我们必须先 partially apply 头两个型别参数，这样我们就会是 `* -> *` 的 kind。这代表 instance 定义会是 `instance Functor (Barry a b) where`。如果我们看 `fmap` 针对 `Barry` 的型别，也就是把 `f` 代换成 `Barry c d`，那就会是 `fmap :: (a -> b) -> Barry c d a -> Barry c d b`。第三个 `Barry` 的型别参数是对于任何型别，所以我们并不牵扯进他。
+
+```
+instance Functor (Barry a b) where
+    fmap f (Barry {yabba = x, dabba = y}) = Barry {yabba = f x, dabba = y}
+```
 
 
 
