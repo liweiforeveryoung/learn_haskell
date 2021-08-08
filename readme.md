@@ -3367,29 +3367,859 @@ instance Functor (Barry a b) where
     fmap f (Barry {yabba = x, dabba = y}) = Barry {yabba = f x, dabba = y}
 ```
 
+# 输入和输出
+
+## hello world
+
+##### 编译和执行 ghc --make
+
+```
+// hello_world.hs
+main = putStrLn "hello, world"
+```
+
+```
+➜  ghc --make hello_world.hs
+[1 of 1] Compiling Main             ( hello_world.hs, hello_world.o )
+Linking hello_world ...
+➜  ./hello_world
+hello, world
+```
+
+##### putStrLn
+
+```
+Prelude> :t putStrLn
+putStrLn :: String -> IO ()
+```
+
+我们可以这么解读 `putStrLn` 的型态：`putStrLn` 接受一个字串并回传一个 I/O action，这 I/O action 包含了 `()` 的型态。（即空的 tuple，或者是 unit 型态）。一个 I/O action 是一个会造成副作用的动作，常是指读取输入或输出到屏幕，同时也代表会回传某些值。在屏幕打印出几个字串并没有什么有意义的回传值可言，所以这边用一个 `()` 来代表。
+
+##### main
+
+那究竟 I/O action 会在什么时候被触发呢？这就是 `main` 的功用所在。一个 I/O action 会在我们把它绑定到 `main` 这个名字并且执行程序的时候触发。
+
+##### do
+
+把整个程序限制在只能有一个 I/O action 看似是个极大的限制。这就是为什么我们需要 do 表示法来将所有 I/O action 绑成一个。来看看下面这个例子。
+
+```
+main = do
+    putStrLn "Hello, what's your name?"
+    name <- getLine
+    putStrLn ("Hey " ++ name ++ ", you rock!")
+```
+
+我们写了一个 do 并且接着一连串指令，就像写个命令式程序一般，每一步都是一个 I/O action。将所有 I/O action 用 do 绑在一起变成了一个大的 I/O action。
+
+这个大的 I/O action 的型态是 `IO ()`，这完全是由最后一个 I/O action 所决定的。
+
+##### getLine
+
+```
+Prelude> :t getLine
+getLine :: IO String
+```
+
+我们可以看到 `getLine` 是一个回传 `String` 的 I/O action。因为它会等用户输入某些字串，这很合理。
+
+##### <-
+
+执行一个 I/O action `getLine` 并将它的结果绑定到 `name` 这个名字。`getLine` 的型态是 `IO String`，所以 `name` 的型态会是 `String`。
+
+如果我们要从 I/O action 拿出某些数据，就一定同时要在另一个 I/O action 中。这就是 Haskell 如何漂亮地分开纯粹跟不纯粹的程序的方法。`getLine` 在这样的意义下是不纯粹的，因为执行两次的时候它没办法保证会回传一样的值。这也是为什么它需要在一个 `IO` 的型态建构子中，那样我们才能在 I/O action 中取出数据。而且任何一段程序一旦依赖着 I/O 数据的话，那段程序也会被视为 I/O code。
+
+##### 在纯粹的代码中使用 I/O action 回传的数据
+
+只要我们把 I/O action 回传的值，绑定它到一个名字，我们便可以暂时地使用它。像在 `name <- getLine` 中 `name` 不过是一个普通字串。
+
+像在 `name <- getLine` 中 `name` 不过是一个普通字串，代表在盒子中的内容。我们能将这个普通的字串传给一个极度复杂的函数，并回传你一生会有多少财富。像是这样：
+
+```haskell
+main = do
+    putStrLn "Hello, what's your name?"
+    name <- getLine
+    putStrLn $ "Read this carefully, because this is your future: " ++ tellFortune name
+```
+
+##### IO action 不等于 字符串
+
+```haskell
+nameTag = "Hello, my name is " ++ getLine
+```
+
+这是一段错误的代码，理由是 `++` 要求两个参数都必须是串列。他左边的参数是 `String`，也就是 `[Char]`。然而 `getLine` 的型态是 `IO String`。你不能串接一个字串跟 I/O action。我们必须先把 `String` 的值从 I/O action 中取出，而<u>**唯一可行**</u>的方法就是在 I/O action 中使用 `name <- getLine`。
+
+##### IO action
+
+每个 I/O action 都有一个值封装在里面。这也是为什么我们之前的程序可以这么写：
+
+```
+main = do
+    foo <- putStrLn "Hello, what's your name?"
+    name <- getLine
+    putStrLn ("Hey " ++ name ++ ", you rock!")
+```
+
+`foo` 只会有一个 `()` 的值，所以绑定到 `foo` 这个名字似乎是多余的。另外注意到我们并没有绑定最后一行的 `putStrLn` 给任何名字。那是因为在一个 do block 中，<u>**最后一个 action 不能绑定任何名字**</u>。
+
+ `putStrLn "BLAH"` 可以写成 `_ <- putStrLn "BLAH"`。但这没什么实际的意义，所以我们宁愿写成 `putStrLn something`。
+
+##### 用 do 串接 IO action
+
+I/O actions 只会在绑定给 `main` 的时候或是在另一个用 do 串起来的 I/O action 才会执行。你可以用 do 来串接 I/O actions，再用 do 来串接这些串接起来的 I/O actions。不过只有最外面的 I/O action 被指定给 main 才会触发执行。
+
+##### 在 do block 中使用 let binding
+
+```haskell
+import Data.Char
+
+main = do
+    putStrLn "What's your first name?"
+    firstName <- getLine
+    putStrLn "What's your last name?"
+    lastName <- getLine
+    let bigFirstName = map toUpper firstName
+        bigLastName = map toUpper lastName
+    putStrLn $ "hey " ++ bigFirstName ++ " " ++ bigLastName ++ ", how are you?"
+```
+
+##### 代码片段：一行一行不断地读取输入
+
+```haskell
+main = do
+    line <- getLine
+    if null line
+        then return ()
+        else do
+            putStrLn $ reverseWords line
+            main
+
+reverseWords :: String -> String
+reverseWords = unwords . map reverse . words
+```
+
+当 if 在一个 I/O do block 中的时候，长的样子是 `if condition then I/O action else I/O action`。
+
+###### return
+
+在 Haskell 中，他的意义则是利用某个 pure value **<u>造出</u>** I/O action。并不代表结束 sub_routine
+
+在 I/O do block 中放一个 `return` 并不会结束执行。像下面这个程序会执行到底。
+
+```haskell
+main = do
+    return ()
+    return "HAHAHA"
+    line <- getLine
+    return "BLAH BLAH BLAH"
+    return 4
+    putStrLn line
+```
+
+```
+main = do
+    a <- return "hell"
+    b <- return "yeah!"
+    putStrLn $ a ++ " " ++ b
+```
+
+可以看到 `return` 与 `<-` 作用相反。`return` 把 value 装进盒子中，而 `<-` 将 value 从盒子拿出来，并绑定一个名称。
+
+#### IO 函数
+
+##### putStr
+
+```
+Prelude> :t putStr
+putStr :: String -> IO ()
+```
+
+`putStr` 跟 `putStrLn` 几乎一模一样，都是接受一个字串当作参数，并回传一个 I/O action 打印出字串到终端上，只差在 `putStrLn` 会换行而 `putStr` 不会罢了。
+
+```haskell
+main = do putStr "Hey, "
+          putStr "I'm "
+          putStrLn "Andy!"
+```
+
+```
+$ runhaskell putstr_test.hs
+Hey, I'm Andy!
+```
+
+##### putChar
+
+```
+Prelude> :t putChar
+putChar :: Char -> IO ()
+```
+
+接受一个字符，并回传一个 I/O action 将他打印到终端上。
+
+`putStr` 实际上就是 `putChar` 递归定义出来的。`putStr` 的边界条件是空字串，所以假设我们打印一个空字串，那他只是回传一个什么都不做的 I/O action，像 `return ()`。如果打印的不是空字串，那就先用 `putChar` 打印出字串的第一个字符，然后再用 `putStr` 打印出字串剩下部份。
+
+```
+putStr :: String -> IO ()
+putStr [] = return ()
+putStr (x:xs) = do
+    putChar x
+    putStr xs
+```
+
+##### print
+
+`print` 接受任何是 `Show` typeclass 的 instance 的型态的值，这代表我们知道如何用字串表示他，调用 `show` 来将值变成字串然后将其输出到终端上。基本上，他就是 `putStrLn . show`。首先调用 `show` 然后把结果喂给 `putStrLn`，回传一个 I/O action 打印出我们的值。
+
+```
+main = do print True
+          print 2
+          print "haha"
+          print 3.2
+          print [3,4,3]
+```
+
+```
+$ runhaskell print_test.hs
+True
+2
+"haha"
+3.2
+[3,4,3]
+```
+
+GHCI 实际上就是用了 `print` 来将值输出到终端。
+
+##### getChar
+
+` getChar`是一个从输入读进一个字符的 I/O action，因此他的 type signature 是 `getChar :: IO Char`，代表一个 I/O action 的结果是 `Char`。注意由于缓冲区的关系，只有当 Enter 被按下的时候才会触发读取字符的行为。
+
+```
+main = do
+    c <- getChar
+    if c /= ' '
+        then do
+            putChar c
+            main
+        else return ()
+```
+
+```
+$ runhaskell getchar_test.hs
+hello sir
+hello
+```
+
+##### when
+
+`when` 这函数可以在 `Control.Monad` 中找到他 (你必须 `import Contorl.Monad` 才能使用他)。他在一个 do block 中看起来就像一个控制流程的 statement，但实际上他的确是一个普通的函数。他接受一个 boolean 值跟一个 I/O action。如果 boolean 值是 `True`，便回传我们传给他的 I/O action。如果 boolean 值是 `False`，便回传 `return ()`，即什么都不做的 I/O action。我们接下来用 `when` 来改写我们之前的程序。
+
+> when 实际上就是少写了一个 `else return ()`
+
+```
+import Control.Monad
+
+main = do
+    c <- getChar
+    when (c /= ' ') $ do
+        putChar c
+        main
+```
+
+##### sequence
+
+`sequence` 接受一串 I/O action，并回传一个会依序执行他们的 I/O action。运算的结果是包在一个 I/O action 的一连串 I/O action 的运算结果。他的 type signature 是 `sequence :: [IO a] -> IO [a]`
+
+```
+Prelude> :t sequence
+sequence :: (Traversable t, Monad m) => t (m a) -> m (t a)
+```
+
+```
+main = do
+    a <- getLine
+    b <- getLine
+    c <- getLine
+    print [a,b,c]
+```
+
+其实可以写成
+
+```
+main = do
+    rs <- sequence [getLine, getLine, getLine]
+    print rs
+```
+
+所以 `sequence [getLine, getLine, getLine]` 作成了一个执行 `getLine` 三次的 I/O action。
+
+一个常见的使用方式是我们将 `print` 或 `putStrLn` 之类的函数 map 到串列上。`map print [1,2,3,4]` 这个动作并不会产生一个 I/O action，而是一串 I/O action，就像是 `[print 1, print 2, print 3, print 4]`。如果我们将一串 I/O action 变成一个 I/O action，我们必须用 `sequence`
 
 
 
+```
+ghci> sequence (map print [1,2,3,4,5])
+1
+2
+3
+4
+5
+[(),(),(),(),()]
+```
+
+那 `[(),(),(),(),()]` 是怎么回事？当我们在 GHCI 中运算 I/O action，他会被执行并把结果打印出来，唯一例外是结果是 `()` 的时候不会被打印出。这也是为什么 `putStrLn "hehe"` 在 GHCI 中只会打印出 `hehe`（因为 `putStrLn "hehe"` 的结果是 `()`）。
+
+##### mapM && mapM_
+
+由于对一个串列 map 一个回传 I/O action 的函数，然后再 sequence 他这个动作太常用了。所以有一些函数在函式库中 `mapM` 跟 `mapM_`。`mapM` 接受一个函数跟一个串列，将对串列用函数 map 然后 sequence 结果。`mapM_` 也作同样的事，只是他把运算的结果丢掉而已。在我们不关心 I/O action 结果的情况下，`mapM_` 是最常被使用的。
+
+```haskell
+ghci> mapM print [1,2,3]
+1
+2
+3
+[(),(),()]
+ghci> mapM_ print [1,2,3]
+1
+2
+3
+```
+
+##### forever
+
+`forever` 接受一个 I/O action 并回传一个永远作同一件事的 I/O action。你可以在 `Control.Monad` 中找到他。下面的程序会不断地要用户输入些东西，并把输入的东西转成大写输出到屏幕上。
+
+```
+import Control.Monad
+import Data.Char
+
+
+main = forever $ do
+    putStr "Give me some input: "
+    l <- getLine
+    putStrLn $ map toUpper l
+```
+
+##### forM
+
+在 `Control.Monad` 中的 `forM` 跟 `mapM` 的作用一样，只是参数的顺序相反而已。第一个参数是串列，而第二个则是函数。
+
+```
+Prelude> :t Control.Monad.forM
+Control.Monad.forM
+  :: (Traversable t, Monad m) => t a -> (a -> m b) -> m (t b)
+Prelude> :t Control.Monad.mapM
+Control.Monad.mapM
+  :: (Traversable t, Monad m) => (a -> m b) -> t a -> m (t b)
+```
+
+```
+import Control.Monad
+
+main = do
+    colors <- forM [1,2,3,4] (\a -> do
+        putStrLn $ "Which color do you associate with the number " ++ show a ++ "?"
+        color <- getLine
+        return color)
+    putStrLn "The colors that you associate with 1, 2, 3 and 4 are: "
+    mapM putStrLn colors
+```
+
+```
+$ runhaskell from_test.hs
+Which color do you associate with the number 1?
+white
+Which color do you associate with the number 2?
+blue
+Which color do you associate with the number 3?
+red
+Which color do you associate with the number 4?
+orange
+The colors that you associate with 1, 2, 3 and 4 are:
+white
+blue
+red
+orange
+```
+
+你可以把 `forM` 的意思想成将串列中的每个元素作成一个 I/O action。至于每个 I/O action 实际作什么就要看原本的元素是什么。然后，执行这些 I/O action 并将结果绑定到某个名称上。或是直接将结果忽略掉。
+
+## 文件与字符流
+
+##### getContents
+
+`getContents` 是一个从标准输入读取直到 end-of-file 字符的 I/O action。他的型态是 `getContents :: IO String`。最酷的是 `getContents` 是惰性 I/O (Lazy I/O)。当我们写了 `foo <- getContents`，他并不会马上读取所有输入，将他们存在 memory 里面。他只有当你真的需要输入数据的时候才会读取。
+
+```haskell
+import Data.Char
+
+main = do
+    contents <- getContents
+    putStr (map toUpper contents)
+```
+
+我们将 `getContents` 取回的字串绑定到 `contents`。然后用 `toUpper` map 到整个字串后打印到终端上。记住字串基本上就是一串惰性的串列 (list)，同时 `getContents` 也是惰性 I/O，他不会一口气读入内容然后将内容存在内存中。实际上，他会一行一行读入并输出大写的版本，这是因为输出才是真的需要输入的数据的时候。
+
+>     contents <- getContents
+>     putStr (map toUpper contents)
+>
+> 这两个阶段，被没有返回，一直在流式处理
+
+##### interact
+
+从输入那一些字串，经由一些转换然后输出这样的模式实在太常用了。常用到甚至建立了一个函数叫 **interact**。`interact` 接受一个 `String -> String` 的函数，并回传一个 I/O action。那个 I/O action 会读取一些输入，调用提供的函数，然后把函数的结果打印出来。所以我们的程序可以改写成这样。
+
+```haskell
+main = interact shortLinesOnly
+
+shortLinesOnly :: String -> String
+shortLinesOnly input =
+    let allLines = lines input
+        shortLines = filter (\line -> length line < 10) allLines
+        result = unlines shortLines
+    in result
+```
+
+```haskell
+main = interact $ unlines . filter ((<10) . length) . lines
+```
+
+能应用 `interact` 的情况有几种，像是从输入 pipe 读进一些内容，然后丢出一些结果的程序；或是从用户获取一行一行的输入，然后丢回根据那一行运算的结果，再拿取另一行。这两者的差别主要是取决于用户使用他们的方式。
+
+#### 文件
+
+```haskell
+import System.IO
+
+main = do
+    handler <- openFile "echo.hs" ReadMode
+    content <- hGetContents handler
+    putStr content
+    hClose handler
+```
+
+##### openFIle
+
+他的 type signature 是 `openFile :: FilePath -> IOMode -> IO Handle`。他说了 `openFile` 接受一个文件路径跟一个 `IOMode`，并回传一个 I/O action，他会打开一个文件并把文件关联到一个 handle。
+
+`FilePath` 不过是 `String` 的 type synonym。
+
+```
+type FilePath = String
+```
+
+`IOMode` 则是一个定义如下的型态
+
+```
+data IOMode = ReadMode | WriteMode | AppendMode | ReadWriteMode
+```
+
+##### withFile
+
+> ps 突然想到了 python
+
+`withFile :: FilePath -> IOMode -> (Handle -> IO a) -> IO a`。他接受一个文件路径，一个 `IOMode` 以及一个函数，这函数则接受一个 handle 跟一个 I/O action。`withFile` 最后回传一个会打开文件，对文件作某件事然后关掉文件的 I/O action。处理的结果是包在最后的 I/O action 中，这结果跟我们给的函数的回传是相同的。
+
+```haskell
+withFile' :: FilePath -> IOMode -> (Handle -> IO a) -> IO a
+withFile' path mode f = do
+    handle <- openFile path mode
+    result <- f handle
+    hClose handle
+    return result
+```
+
+##### hxxx
+
+就像 `hGetContents` 对应 `getContents` 一样，只不过是针对某个文件。我们也有 **hGetLine**、**hPutStr**、**hPutStrLn**、**hGetChar** 等等。他们分别是少了 h 的那些函数的对应。只不过他们要多拿一个 handle 当参数，并且是针对特定文件而不是标准输出或标准输入。
+
+##### readFile
+
+**readFile** 的 type signature 是 `readFile :: FilePath -> IO String`。记住，`FilePath` 不过是 `String` 的一个别名。`readFile` 接受一个文件路径，回传一个惰性读取我们文件的 I/O action。然后将文件的内容绑定到某个字串。他比起先 `openFile`，绑定 handle，然后 `hGetContents` 要好用多了。这边是一个用 `readFile` 改写之前例子的范例：
+
+```
+import System.IO
+
+main = do
+    contents <- readFile "echo.hs"
+    putStr contents
+```
+
+##### writeFile
+
+**writeFile** 的型态是 `writefile :: FilePath -> String -> IO ()`。他接受一个文件路径，以及一个要写到文件中的字串，并回传一个写入动作的 I/O action。如果这个文件已经存在了，他会先把文件内容都砍了再写入。下面示范了如何把 girlfriend.txt 的内容转成大写然后写入到 girlfriendcaps.txt 中
+
+```
+import System.IO
+import Data.Char
+
+main = do
+    contents <- readFile "girlfriend.txt"
+    writeFile "girlfriendcaps.txt" (map toUpper contents)
+```
 
 
 
+```
+$ runhaskell girlfriendtocaps.hs
+$ cat girlfriendcaps.txt
+HEY! HEY! YOU! YOU!
+I DON'T LIKE YOUR GIRLFRIEND!
+NO WAY! NO WAY!
+I THINK YOU NEED A NEW ONE!
+```
+
+##### appendFile
+
+**appendFile** 的型态很像 `writeFile`，只是 `appendFile` 并不会在文件存在时把文件内容砍掉而是接在后面。
+
+假设我们有一个文件叫 todo.txt``，里面每一行是一件要做的事情。现在我们写一个程序，从标准输入接受一行将他加到我们的 to-do list 中。
+
+```
+import System.IO
+
+main = do
+    todoItem <- getLine
+    appendFile "todo.txt" (todoItem ++ "\n")
+```
+
+```
+$ runhaskell appendtodo.hs
+Iron the dishes
+$ runhaskell appendtodo.hs
+Dust the dog
+$ runhaskell appendtodo.hs
+Take salad out of the oven
+$ cat todo.txt
+Iron the dishes
+Dust the dog
+Take salad out of the oven
+```
+
+由于 `getLine` 回传的值不会有换行字符，我们需要在每一行最后加上 `"\n"`。
+
+##### chunk && block && hSetBuffering && hFlush
+
+还有一件事，我们提到 `contents <- hGetContents handle` 是惰性 I/O，不会将文件一次都读到内存中。 所以像这样写的话：
+
+```
+main = do
+    withFile "something.txt" ReadMode (\handle -> do
+        contents <- hGetContents handle
+        putStr contents)
+```
+
+实际上像是用一个 pipe 把文件弄到标准输出。正如你可以把 list 想成 stream 一样，你也可以把文件想成 stream。他会每次读一行然后打印到终端上。你也许会问这个 pipe 究竟一次可以塞多少东西，读去硬盘的频率究竟是多少？对于文本档而言，缺省的 buffer 通常是 line-buffering。这代表一次被读进来的大小是一行。这也是为什么在这个 case 我们是一行一行处理。对于 binary file 而言，缺省的 buffer 是 block-buffering。这代表我们是一个 chunk 一个 chunk 去读得。而一个 chunk 的大小是根据操作系统不同而不同。
+
+你能用 `hSetBuffering` 来控制 buffer 的行为。他接受一个 handle 跟一个 `BufferMode`，回传一个会设置 buffer 行为的 I/O action。`BufferMode` 是一个 enumeration 型态，他可能的值有：`NoBuffering`, `LineBuffering` 或 `BlockBuffering (Maybe Int)`。其中 `Maybe Int` 是表示一个 chunck 有几个 byte。如果他的值是 `Nothing`，则操作系统会帮你决定 chunk 的大小。`NoBuffering` 代表我们一次读一个 character。一般来说 `NoBuffering` 的表现很差，因为他访问硬盘的频率很高。
+
+接下来是我们把之前的范例改写成用 2048 bytes 的 chunk 读取，而不是一行一行读。
+
+```
+main = do
+    withFile "something.txt" ReadMode (\handle -> do
+        hSetBuffering handle $ BlockBuffering (Just 2048)
+        contents <- hGetContents handle
+        putStr contents)
+```
+
+用更大的 chunk 来读取对于减少访问硬盘的次数是有帮助的，特别是我们的文件其实是透过网络来访问。
+
+##### removeFile renameFIle
+
+略
+
+#### 命令行
+
+##### getArgs && getProgName
+
+在 `System.Environment` 模块当中有两个很酷的 I/O actions，一个是 **getArgs**，他的 type 是 `getArgs :: IO [String]`，他是一个拿取命令行引数的 I/O action，并把结果放在包含的一个串列中。**getProgName** 的型态是 `getProgName :: IO String`，他则是一个 I/O action 包含了程序的名称。
+
+```haskell
+import System.Environment
+import Data.List
+
+main = do
+    args <- getArgs
+    progName <- getProgName
+    putStrLn "The arguments are:"
+    mapM putStrLn args
+    putStrLn "The program name is:"
+    putStrLn progName
+```
+
+```
+$ ./arg-test first second w00t "multi word arg"
+The arguments are:
+first
+second
+w00t
+multi word arg
+The program name is:
+arg-test
+```
+
+##### 一个小程序 `todo`
+
+```haskell
+import System.Environment
+import System.Directory
+import System.IO
+import Data.List
+
+-- 我们先作一个分发的 association list。他会把命令行引数当作 key，而对应的处理函数当作 value。这些函数的型态都是 [String] -> IO ()。
+dispatch :: [(String, [String] -> IO ())]
+dispatch =  [ ("add", add)
+            , ("view", view)
+            , ("remove", remove)
+            ]
+            
+main = do
+    (command:args) <- getArgs
+    let (Just action) = lookup command dispatch
+    action args
+    
+add :: [String] -> IO ()
+add [fileName, todoItem] = appendFile fileName (todoItem ++ "\n")
+
+view :: [String] -> IO ()
+view [fileName] = do
+    contents <- readFile fileName
+    let todoTasks = lines contents
+    numberedTasks = zipWith (\n line -> show n ++ " - " ++ line) [0..] todoTasks
+    putStr $ unlines numberedTasks
+
+remove :: [String] -> IO ()
+remove [fileName, numberString] = do
+    handle <- openFile fileName ReadMode
+    (tempName, tempHandle) <- openTempFile "." "temp"
+    contents <- hGetContents handle
+    let number = read numberString
+        todoTasks = lines contents
+        newTodoItems = delete (todoTasks !! number) todoTasks
+    hPutStr tempHandle $ unlines newTodoItems
+    hClose handle
+    hClose tempHandle
+    removeFile fileName
+    renameFile tempName fileName
+```
+
+#### 随机数
+
+##### random
+
+在 `System.Random` 模块中。他包含所有满足我们需求的函数。让我们先来看其中一个，就是 **random**。他的型态是 `random :: (RandomGen g, Random a) => g -> (a, g)`。
+
+```
+cabal install --lib random # 需要先安装 random 模块
+```
+
+**RandomGen** typeclass 是指那些可以当作乱源的型态。而**Random** typeclass 则是可以装乱数的型态。一个布林值可以是随机值，不是 `True` 就是 `False`。
+
+他接受一个 random generator，然后回传一个随机值以及一个新的 random generator。为什么他要回传一个新的 random generator 呢？就是下面我们要讲的。接着不断对返回的 generator 调用 random 产生新的随机数，一直递归下去。
+
+##### StdGen && mkStdGen
+
+**StdGen** 是 `RandomGen` 的一个 instance。 我们可以自己手动作一个 `StdGen` 也可以告诉系统给我们一个现成的。
+
+要自己做一个 random generator，要使用 **mkStdGen** 这个函数。他的型态是 `mkStdGen :: Int -> StdGen`。他接受一个整数，然后根据这个整数会给一个 random generator。
+
+##### 指定返回类型
+
+```
+ghci> random (mkStdGen 100)
+```
+
+```
+<interactive>:1:0:
+    Ambiguous type variable `a' in the constraint:
+        `Random a' arising from a use of `random' at <interactive>:1:0-20
+    Probable fix: add a type signature that fixes these type variable(s)  `
+```
+
+这是什么？由于 `random` 函数会回传 `Random` typeclass 中任何一种型态，所以我们必须告诉 Haskell 我们是要哪一种型态。不要忘了我们是回传 random value 跟 random generator 的一个 pair
+
+```
+ghci> random (mkStdGen 100) :: (Int, StdGen)
+(-1352021624,651872571 1655838864)
+```
+
+##### 例子
+
+仿真丢三次铜板的函数
+
+```
+threeCoins :: StdGen -> (Bool, Bool, Bool)
+threeCoins gen =
+    let (firstCoin, newGen) = random gen
+    (secondCoin, newGen') = random newGen
+    (thirdCoin, newGen'') = random newGen'
+    in  (firstCoin, secondCoin, thirdCoin)
+```
+
+留意我们不需要写 `random gen :: (Bool, StdGen)`。那是因为我们已经在函数的型态宣告那边就表明我们要的是布林。而 Haskell 可以推敲出我们要的是布林值。
+
+##### randoms
+
+有一个函数叫 **randoms**，他接受一个 generator 并回传一个无穷串行。
+
+```
+ghci> take 5 $ randoms (mkStdGen 11) :: [Int]
+[-1807975507,545074951,-1015194702,-1622477312,-502893664]
+ghci> take 5 $ randoms (mkStdGen 11) :: [Bool]
+[True,True,True,True,False]
+ghci> take 5 $ randoms (mkStdGen 11) :: [Float]
+[7.904789e-2,0.62691015,0.26363158,0.12223756,0.38291094]
+```
+
+##### randomR && randomRs 范围 random
+
+`randomR :: (RandomGen g, Random a) :: (a, a) -> g -> (a, g)`，代表他有点类似 `random`。只不过他的第一个参数是一对数目，定义了最后产生乱数的上界以及下界。
+
+```
+ghci> randomR (1,6) (mkStdGen 359353)
+(6,1494289578 40692)
+ghci> randomR (1,6) (mkStdGen 35935335)
+(3,1250031057 40692)
+```
+
+另外也有一个 **randomRs** 的函数，他会产生一连串在给定范围内的乱数：
+
+```
+ghci> take 10 $ randomRs ('a','z') (mkStdGen 3) :: [Char]
+"ndkxbvmomg"
+```
+
+##### getStdGen
+
+他的型态是 `IO StdGen`。当你的程序执行时，他会跟系统要一个 random generator，并存成一个 global generator。`getStdGen` 会替你拿那个 global random generator 并把他绑定到某个名称上。
+
+这里有一个简单的产生随机字串的程序。
+
+```
+import System.Random
+
+main = do
+    gen <- getStdGen
+    putStr $ take 20 (randomRs ('a','z') gen)
+```
+
+#### exceptions
+
+尽管有表达力够强的型态( 例如 Either )来辅助失败的情形，Haskell 仍然支持 exception，因为 exception 在 I/O 的 contexts 下是比较合理的。在处理 I/O 的时候会有一堆奇奇怪怪的事情发生，环境是很不能被信赖的。像是打开文件。文件有可能被 lock 起来，也有可能文件被移除了，或是整个硬盘都被拔掉。所以直接跳到处理错误的代码是很合理的。
+
+我们了解到 I/O code 会丢出 exception 是件合理的事。至于 pure code 呢？其实他也能丢出 Exception。想想看 `div` 跟 `head` 两个案例。他们的型态是 `(Integral a) => a -> a -> a` 以及 `[a] -> a`。`Maybe` 跟 `Either` 都没有在他们的回传型态中，但他们都有可能失败。`div` 有可能除以零，而 `head` 有可能你传给他一个空的 list。
+
+```
+ghci> 4 `div` 0
+*** Exception: divide by zero
+ghci> head []
+*** Exception: Prelude.head: empty list
+```
+
+pure code 能丢出 Exception，但 Exception 只能在 I/O section 中被接到（也就是在 `main` 的 do block 中）这是因为在 pure code 中你不知道什么东西什么时候会被 evaluate。因为 lazy 特性的缘故，程序没有一个特定的执行顺序，但 I/O code 有。
+
+不要在 pure code 里面使用 Exception。利用 Haskell 的型态系统，尽量使用 `Either` 或 `Maybe` 之类的型态来表示可能失败的计算。
+
+##### catch
+
+我们必须使用 `System.IO.Error` 中的 **catch** 函数。他的型态是 `catch :: IO a -> (IOError -> IO a) -> IO a`。他接受两个参数，第一个是一个 I/O action。像是他可以接受一个打开文件的 I/O action。第二个是 handler。如果第一个参数的 I/O action 丢出了 Exception，则他会被传给 handler，他会决定要作些什么。所以整个 I/O action 的结果不是如预期中做完第一个参数的 I/O action，就是 handler 处理的结果。
+
+handler 接受一个 `IOError` 型态的值，他代表的是一个 I/O exception 已经发生了。他也带有一些 exception 本身的信息。至于这型态在语言中使如何被实作则是要看编译器。这代表我们没办法用 pattern matching 的方式来查看 `IOError`。就像我们不能用 pattern matching 来查看 `IO something` 的内容。但我们能用一些 predicate 来查看他们。
+
+我们来看看一个展示 `catch` 的程序
 
 
 
+```
+import System.Environment
+import System.IO
+import System.IO.Error
+
+
+main = toTry `catch` handler
+
+
+toTry :: IO ()
+toTry = do (fileName:_) <- getArgs
+            contents <- readFile fileName
+            putStrLn $ "The file has " ++ show (length (lines contents)) ++ " lines!"
+
+
+handler :: IOError -> IO ()
+handler e = putStrLn "Whoops, had some trouble!"
+```
+
+首先你看到我们可以在关键字周围加上 backticks 来把 `catch` 当作 infix function 用，因为他刚好接受两个参数。这样使用让可读性变好。`toTry `catch` handler` 跟 `catch toTry handler` 是一模一样的。`toTry` 是一个 I/O action，而 `handler` 接受一个 `IOError`，并回传一个当 exception 发生时被执行的 I/O action。
+
+来看看执行的结果。
 
 
 
+```
+$ runhaskell count_lines.hs i_exist.txt
+The file has 3 lines!
+
+
+$ runhaskell count_lines.hs i_dont_exist.txt
+Whoops, had some trouble!
+```
+
+在 handler 里面我们并没有检查我们拿到的是什么样的 `IOError`，我们只是打印出 `"Whoops, had some trouble!"`。接住任何种类的 Exception 就跟其他语言一样，在 Haskell 中也不是一个好的习惯。假如其他种类的 Exception 发生了，好比说我们送一个中断指令，而我们没有接到的话会发生什么事？这就是为什么我们要做跟其他语言一样的事：就是检查我们拿到的是什么样的 Exception。如果说是我们要的 Exception，那就做对应的处理。如果不是，我们再重新丢出 Exception。我们把我们的程序这样修改，只接住文件不存在的 Exception。
 
 
 
+```
+import System.Environment
+import System.IO
+import System.IO.Error
 
 
+main = toTry `catch` handler
 
 
+toTry :: IO ()
+toTry = do (fileName:_) <- getArgs
+            contents <- readFile fileName
+            putStrLn $ "The file has " ++ show (length (lines contents)) ++ " lines!"
 
 
+handler :: IOError -> IO ()
+handler e
+    | isDoesNotExistError e = putStrLn "The file doesn't exist!"
+    | otherwise = ioError e
+```
 
+除了 handler 以外其他东西都没变，我们只接住我们想要的 I/O exception。这边使用了 `System.IO.Error` 中的函数 **isDoesNotExistError** 跟 **ioError**。`isDoesNotExistError` 是一个运作在 `IOError` 上的 predicate ，他代表他接受一个 `IOError` 然后回传 `True` 或 `False`，他的型态是 `isDoesNotExistError :: IOError -> Bool`。我们用他来判断是否这个错误是文件不存在所造成的。我们这边使用 guard，但其实也可以用 if else。如果 exception 不是由于文件不存在所造成的，我们就用 `ioEroror` 重新丢出接到的 exception。他的型态是 `ioError :: IOException -> IO a`，所以他接受一个 `IOError` 然后产生一个会丢出 exception 的 I/O action。那个 I/O action 的型态是 `IO a`，但他其实不会产生任何结果，所以他可以被当作是 `IO anything`。
 
+所以有可能在 `toTry` 里面丢出的 exception 并不是文件不存在造成的，而 `toTry `catch` handler` 会接住再丢出来，很酷吧。
+
+##### predicate
+
+程序里面有好几个运作在 `IOError` 上的 I/O action，当其中一个没有被 evaluate 成 `True` 时，就会掉到下一个 guard。这些 predicate 分别为：
+
+- **isAlreadyExistsError**
+- **isDoesNotExistError**
+- **isFullError**
+- **isEOFError**
+- **isIllegalOperation**
+- **isPermissionError**
+- **isUserError**
+
+大部分的意思都是显而易见的。当我们用了 **userError** 来丢出 exception 的时候，`isUserError` 被 evaluate 成 `True`。例如说，你可以写 `ioError $ userError "remote computer unplugged!"`，尽管用 `Either` 或 `Maybe` 来表示可能的错误会比自己丢出 exception 更好。
+
+所以你可能写一个像这样的 handler
+
+```
+handler :: IOError -> IO ()
+handler e
+    | isDoesNotExistError e = putStrLn "The file doesn't exist!"
+    | isFullError e = freeSomeSpace
+    | isIllegalOperation e = notifyCops
+    | otherwise = ioError e
+```
+
+其中 `notifyCops` 跟 `freeSomeSpace` 是一些你定义的 I/O action。如果 exception 不是你要的，记得要把他们重新丢出，不然你的程序可能只会安静地当掉。
 
 # haskell 标准库函数
 
