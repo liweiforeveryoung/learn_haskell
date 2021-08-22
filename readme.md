@@ -1,4 +1,4 @@
-# 2021/6/19
+#### 基本
 
 ##### 安装 ghci
 
@@ -738,7 +738,7 @@ ghci> zip [1,2,3] [3,4]
 [(1,3),(2,4)]
 ```
 
-# 2021 6 20
+
 
 ### type
 
@@ -4221,7 +4221,782 @@ handler e
 
 其中 `notifyCops` 跟 `freeSomeSpace` 是一些你定义的 I/O action。如果 exception 不是你要的，记得要把他们重新丢出，不然你的程序可能只会安静地当掉。
 
-# haskell 标准库函数
+# Functors, Applicative Functors 与 Monoids
+
+```
+// functor 相关回忆
+Functor f
+fmap :: (a -> b) -> f a -> f b
+```
+
+IO 也是一个 Functor instance
+
+```haskell
+instance Functor IO where
+    fmap f action = do
+        result <- action
+        return (f result)
+```
+
+#####  `(->) r`
+
+另一个 `Functor` 的案例是 `(->) r`，只是我们先前没有注意到。你可能会困惑到底 `(->) r` 究竟代表什么？一个 `r -> a` 的型态可以写成 `(->) r a`，就像是 `2 + 3` 可以写成 `(+) 2 3` 一样。我们可以从一个不同的角度来看待 `(->) r a`，他其实只是一个接受两个参数的 type constructor，好比 `Either`。但记住我们说过 `Functor` 只能接受一个 type constructor。这也是为什么 `(->)` 不是 `Functor` 的一个 instance，但 `(->) r` 则是。如果程序的语法允许的话，你也可以将 `(->) r` 写成 `(r ->)`。就如 `(2+)` 代表的其实是 `(+) 2`。至于细节是如何呢？我们可以看看 `Control.Monad.Instances`。
+
+```
+instance Functor ((->) r) where  
+    fmap f g = (\x -> f (g x))
+```
+
+```
+f 是一个 func
+g 也是一个 func
+返回值也是一个 func, 这个 func 接收一个参数
+假设 f 的类型是 arg1 -> arg2
+则 g 的类型是 r -> arg1
+返回值的类型是  r -> arg2
+```
+
+首先我们来看看 `fmap` 的型态。他的型态是 `fmap :: (a -> b) -> f a -> f b`。我们把所有的 `f` 在心里代换成 `(->) r`。则 `fmap` 的型态就变成 `fmap :: (a -> b) -> ((->) r a) -> ((->) r b)`。接着我们把 `(->) r a` 跟 `(->) r b` 换成 `r -> a` 跟 `r -> b`。则我们得到 `fmap :: (a -> b) -> (r -> a) -> (r -> b)`。
+
+从上面的结果看到将一个 function map over 一个 function 会得到另一个 function，就如 map over 一个 function 到 `Maybe` 会得到一个 `Maybe`，而 map over 一个 function 到一个 list 会得到一个 list。而 `fmap :: (a -> b) -> (r -> a) -> (r -> b)` 告诉我们什么？他接受一个从 `a` 到 `b` 的 function，跟一个从 `r` 到 `a` 的 function，并回传一个从 `r` 到 `b` 的 function。这根本就是 function composition。把 `r -> a` 的输出接到 `a -> b` 的输入，的确是 function composition 在做的事。如果你再仔细看看 instance 的定义，会发现真的就是一个 function composition。
+
+```
+instance Functor ((->) r) where  
+    fmap = (.)
+```
+
+这很明显就是把 `fmap` 当 composition 在用。可以用 `:m + Control.Monad.Instances` 把模块装载进来，并做一些尝试。
+
+##### Functor 的两大定律
+
+对于 `Functor` 的 instance 来说，总共两条定律应该被遵守。不过他们不会在 Haskell 中自动被检查，所以你必须自己确认这些条件。
+
+###### 第一条: 如果我们对 functor 做 map `id`，那得到的新的 functor 应该要跟原来的一样
+
+如果写得正式一点，他代表 `fmap id = id`。基本上他就是说对 functor 调用 `fmap id`，应该等同于对 functor 调用 `id` 一样。毕竟 `id` 只是 identity function，他只会把参数照原样丢出。他也可以被写成 `\x -> x`。如果我们对 functor 的概念就是可以被 map over 的对象，那 `fmap id = id` 的性就显而易见。
+
+```
+ghci> fmap id (Just 3)  
+Just 3  
+ghci> id (Just 3)  
+Just 3  
+```
+
+```
+instance Functor Maybe where  
+    fmap f (Just x) = Just (f x)  
+    fmap f Nothing = Nothing
+```
+
+```
+id: a -> a
+fmap id Maybe: Maybe a -> Maybe a
+```
+
+
+
+###### 第二定律: 先将两个函数合成, 并将结果 map over 一个 functor 的结果 = 先将第一个函数 map over 一个 functor，再将第二个函数 map over 那个 functor 的结果
+
+正式地写下来的话就是 `fmap (f . g) = fmap f . fmap g`。
+
+或是用另外一种写法，对于任何一个 functor F，下面这个式子应该要被遵守：`fmap (f . g) F = fmap f (fmap g F)`。
+
+```
+f: t1 -> t2
+g: t3 -> t1
+f . g: t3 -> t2
+fmap (f . g) F: F t3 -> F t2
+
+fmap g F: F t3 -> F t1
+fmap f (fmap g F): F t3 (ti -> t2) -> F t1 (t1 -> t2)  ????
+```
+
+我们能在这边演练一下 `Maybe` 是如何遵守第二定律的。首先 `fmap (f . g)` 来 map over `Nothing` 的话，我们会得到 `Nothing`。因为用任何函数来 `fmap` `Nothing` 的话都会回传 `Nothing`。如果我们 `fmap f (fmap g Nothing)`，我们会得到 `Nothing`。可以看到当面对 `Nothing` 的时候，`Maybe` 很显然是遵守第二定律的。 那对于 `Just something` 呢？如果我们使用 `fmap (f . g) (Just x)` 的话，从实作的代码中我可以看到 `Just ((f . g ) x)`，也就是 `Just (f (g x))`。如果我们使用 `fmap f (fmap g (Just x))` 的话我们可以从实作知道 `fmap g (Just x)` 会是 `Just (g x)`。`fmap f (fmap g (Just x))` 跟 `fmap f (Just (g x))` 相等。而从实作上这又会相等于 `Just (f (g x))`。
+
+#### Applicative
+
+我们来看看 `Applicative` 这个 typeclass。他位在 `Control.Applicative` 中，在其中定义了两个函数 `pure` 跟 `<*>`。他并没有提供缺省的实作，如果我们想使用他必须要为他们 applicative functor 的实作。typeclass 定义如下：
+
+
+
+```
+class (Functor f) => Applicative f where  
+    pure :: a -> f a  
+    (<*>) :: f (a -> b) -> f a -> f b
+```
+
+首先来看第一行。他开启了 `Applicative` 的定义，并加上 class contraint。描述了一个型别构造子要是 `Applicative`，他必须也是 `Functor`。这就是为什么我们说一个型别构造子属于 `Applicative` 的话，他也会是 `Functor`，因此我们能对他使用 `fmap`。
+
+第一个定义的是 `pure`。他的型别宣告是 `pure :: a -> f a`。`f` 代表 applicative functor 的 instance。由于 Haskell 有一个优秀的型别系统，其中函数又是将一些参数映射成结果，我们可以从型别宣告中读出许多消息。`pure` 应该要接受一个值，然后回传一个包含那个值的 applicative functor。我们这边是用盒子来作比喻，即使有一些比喻不完全符合现实的情况。尽管这样，`a -> f a` 仍有许多丰富的信息，他确实告诉我们他会接受一个值并回传一个 applicative functor，里面装有结果。
+
+对于 `pure` 比较好的说法是把一个普通值放到一个缺省的 context 下，一个最小的 context 但仍然包含这个值。
+
+`<*>` 也非常有趣。他的型别是 `f (a -> b) -> f a -> f b`。这有让你联想到什么吗？没错！就是 `fmap :: (a -> b) -> f a -> f b`。他有点像加强版的 `fmap`。然而 `fmap` 接受一个函数跟一个 functor，然后套用 functor 之中的函数。`<*>` 则是接受一个装有函数的 functor 跟另一个 functor，然后取出第一个 functor 中的函数将他对第二个 functor 中的值做 map。
+
+我们来看看 `Maybe` 的 `Applicative` 实作：
+
+```
+instance Applicative Maybe where  
+    pure = Just  
+    Nothing <*> _ = Nothing  
+    (Just f) <*> something = fmap f something
+```
+
+```
+Just f 的类型是就是 Maybe f    
+也就是 Maybe (a->b)
+
+pure 的作用就是将某个 value 放在放在 context 里
+例如将 3 放在 Maybe 这个 context 下面, 就得到了 Just 3
+```
+
+从 class 的定义我们可以看到 `f` 作为 applicative functor 会接受一个具体型别当作参数，所以我们是写成 `instance Applicative Maybe where` 而不是写成 `instance Applicative (Maybe a) where`。
+
+首先看到 `pure`。他只不过是接受一个东西然后包成 applicative functor。我们写成 `pure = Just` 是因为 `Just` 不过就是一个普通函数。我们其实也可以写成 `pure x = Just x`。
+
+接着我们定义了 `<*>`。我们无法从 `Nothing` 中抽出一个函数，因为 `Nothing` 并不包含一个函数。所以我们说如果我们要尝试从 `Nothing` 中取出一个函数，结果必定是 `Nothing`。如果你看看 `Applicative` 的定义，你会看到他有 `Functor` 的限制，他代表 `<*>` 的两个参数都会是 functors。如果第一个参数不是 `Nothing`，而是一个装了函数的 `Just`，而且我们希望将这个函数对第二个参数做 map。这个也考虑到第二个参数是 `Nothing` 的情况，因为 `fmap` 任何一个函数至 `Nothing` 会回传 `Nothing`。
+
+对于 `Maybe` 而言，如果左边是 `Just`，那 `<*>` 会从其中抽出了一个函数来 map 右边的值。如果有任何一个参数是 `Nothing`。那结果便是 `Nothing`。
+
+applicative functors 让你可以用单一一个函数操作好几个 functors。看看下面一段代码：
+
+```
+ghci> pure (+) <*> Just 3 <*> Just 5  
+Just 8  
+ghci> pure (+) <*> Just 3 <*> Nothing  
+Nothing  
+ghci> pure (+) <*> Nothing <*> Just 5  
+Nothing
+```
+
+##### `<$>`
+
+ `pure f <*> x` 等于 `fmap f x`
+
+对于 `pure f <*> x <*> y <*> ...`，我们会写成 `fmap f x <*> y <*> ...`
+
+因此 `Control.Applicative` 会 export 一个函数 `<$>`，他基本上就是中缀版的 `fmap`。他是这么被定义的：
+
+```
+(<$>) :: (Functor f) => (a -> b) -> f a -> f b  
+f <$> x = fmap f x
+```
+
+```
+ghci> (++) <$> Just "johntra" <*> Just "volta"  
+Just "johntravolta"
+```
+
+```
+Prelude> fmap (++) (Just "johntra") <*> Just "volta"
+Just "johntravolta"
+```
+
+```
+Prelude> Just (++) <*> Just "johntra" <*> Just "volta"
+Just "johntravolta"
+```
+
+##### List
+
+List 也是 applicative functor
+
+```
+instance Applicative [] where  
+    pure x = [x]  
+    fs <*> xs = [f x | f <- fs, x <- xs]
+```
+
+ `pure` 是把一个值放进缺省的 context 中。换种说法就是一个会产生那个值的最小 context。而对 list 而言最小 context 就是 `[]`，但由于空的 list 并不包含一个值，所以我们没办法把他当作 `pure`。
+
+```
+ghci> pure "Hey" :: [String]  
+["Hey"]  
+ghci> pure "Hey" :: Maybe String  
+Just "Hey"
+```
+
+`(<*>) :: [a -> b] -> [a] -> [b]`。他是用 list comprehension 来实作的。`<*>` 必须要从左边的参数取出函数，将他 map over 右边的参数。但左边的 list 有可能不包含任何函数，也可能包含一个函数，甚至是多个函数。而右边的 list 有可能包含多个值。这也是为什么我们用 list comprehension 的方式来从两个 list 取值。我们要对左右任意的组合都做套用的动作。而得到的结果就会是左右两者任意组合的结果。
+
+```
+ghci> [(*0),(+100),(^2)] <*> [1,2,3]  
+[0,0,0,101,102,103,1,4,9]
+```
+
+左边的 list 包含三个函数，而右边的 list 有三个值。所以结果会是有九个元素的 list。在左边 list 中的每一个函数都被套用到右边的值。如果我们今天在 list 中的函数是接收两个参数的，我们也可以套用到两个 list 上。
+
+```
+ghci> [(+),(*)] <*> [1,2] <*> [3,4]  
+[4,5,5,6,3,4,6,8]
+```
+
+##### IO
+
+另一个我们已经看过的 `Applicative` 的 instance 是 `IO`，来看看他是怎么实作的：
+
+```
+instance Applicative IO where  
+    pure = return  
+    a <*> b = do  
+        f <- a  
+        x <- b  
+        return (f x)
+```
+
+由于 `pure` 是把一个值放进最小的 context 中，所以将 `return` 定义成 `pure` 是很合理的。因为 `return` 也是做同样的事情。他做了一个不做任何事情的 I/O action，他可以产生某些值来作为结果，但他实际上并没有做任何 I/O 的动作，例如说印出结果到终端或是文件。
+
+```
+myAction :: IO String  
+myAction = do  
+    a <- getLine  
+    b <- getLine  
+    return $ a ++ b
+```
+
+等价于:
+
+```
+myAction :: IO String  
+myAction = (++) <$> getLine <*> getLine
+```
+
+```
+(++) <$> getLine
+=> fmap (++) getLine
+=> do
+		str <- getLine
+		return (str)++
+		
+(++) <$> getLine <*> getLine
+=> do
+		f <- (return (str)++) // = (str)++
+		line <- getLine
+		return f line 
+=>  return str (++) line
+```
+
+##### (->) r
+
+当我们用 `pure` 将一个值包成 applicative functor 的时候，他产生的结果永远都会是那个值。也就是最小的 context。那也是为什么对于 function 的 `pure` 实作来讲，他就是接受一个值，然后造一个函数永远回传那个值，不管他被喂了什么参数。如果你限定 `pure` 的型别至 `(->) r` 上，他就会是 `pure :: a -> (r -> a)`。
+
+```
+ghci> (pure 3) "blah"  
+3
+```
+
+而 `<*>` 的实作是比较不容易了解的，我们最好看一下怎么用 applicative style 的方式来使用作为 applicative functor 的 function。
+
+```
+ghci> :t (+) <$> (+3) <*> (*100)  
+(+) <$> (+3) <*> (*100) :: (Num a) => a -> a  
+ghci> (+) <$> (+3) <*> (*100) $ 5  
+508
+```
+
+将两个 applicative functor 喂给 `<*>` 可以产生一个新的 applicative functor，所以如果我们丢给他两个函数，我们能得到一个新的函数。所以是怎么一回事呢？当我们做 `(+) <$> (+3) <*> (*100)`，我们是在实作一个函数，他会将 `(+3)` 跟 `(*100)` 的结果再套用 `+`。要看一个实际的范例的话，可以看一下 `(+) <$> (+3) <*> (*100) $ 5` 首先 `5` 被丢给 `(+3)` 跟 `(*100)`，产生 `8` 跟 `500`。然后 `+` 被套用到 `8` 跟 `500`，得到 `508`。
+
+```
+ghci> (\x y z -> [x,y,z]) <$> (+3) <*> (*2) <*> (/2) $ 5  
+[8.0,10.0,2.5]
+```
+
+这边也一样。我们创建了一个函数，他会调用 `\x y z -> [x,y,z]`，而丢的参数是 `(+3)`, `(*2)` 跟 `(/2)`。`5` 被丢给以上三个函数，然后他们结果又接到 `\x y z -> [x, y, z]`。
+
+##### ZipList
+
+对于 list 要作为一个 applicative functor 可以有多种方式。我们已经介绍过其中一种。
+
+如果套用 `<*>`，左边是许多函数，而右边是许多值，那结果会是函数套用到值的所有组合。如果我们做 `[(+3),(*2)] <*> [1,2]`。那 `(+3)` 会先套用至 `1` 跟 `2`。接着 `(*2)` 套用至 `1` 跟 `2`。而得到 `[4,5,2,4]`。
+
+然而 `[(+3),(*2)] <*> [1,2]` 也可以这样运作:把左边第一个函数套用至右边第一个值，接着左边第二个函数套用右边第二个值，以此类推。这样得到的会是 `[4,4]`。或是 `[1 + 3, 2 * 2]`。
+
+由于一个型别不能对同一个 typeclass 定义两个 instance，所以才会定义了 `ZipList a`，他只有一个构造子 `ZipList`，他只包含一个字段，他的型别是 list。
+
+```
+instance Applicative ZipList where  
+        pure x = ZipList (repeat x)  
+        ZipList fs <*> ZipList xs = ZipList (zipWith (\f x -> f x) fs xs)
+```
+
+`pure` 也值得我们讨论一下。他接受一个值，把他重复地放进一个 list 中。`pure "haha"` 就会是 `ZipList (["haha","haha","haha"...`。这可能会造成些混淆，毕竟我们说过 `pure` 是把一个值放进一个最小的 context 中。而你会想说无限长的 list 不可能会是一个最小的 context。但对于 zip list 来说这是很合理的，因为他必须在 list 的每个位置都有值。<u>这也遵守了 `pure f <*> xs` 必须要等价于 `fmap f xs` 的特性。</u>
+
+#### newtype
+
+`newtype` 的作用是从**<u>一个</u>**现有的型别中定义出新的型别
+
+在之前的章节中，我们了解到其实 list 有很多种方式可以被视为一种 applicative functor。一中方式是定义 `<*>` 将左边的每一个值跟右边的每一个值组合，而得到各种组合的结果。
+
+
+
+```
+ghci> [(+1),(*100),(*5)] <*> [1,2,3]  
+[2,3,4,100,200,300,5,10,15]
+```
+
+第二种方式是将 `<*>` 定义成将左边的第一个函数套用至右边的第一个值，然后将左边第二个函数套用至右边第二个值。以此类推。最终，这表现得有点像将两个 list 用一个拉链拉起来一样。
+
+但由于 list 已经被定义成 `Applicaitive` 的 instance 了，所以我们要怎么要让 list 可以被定义成第二种方式呢？
+
+所以这跟 newtype 这个关键字有什么关系呢？想想看我们是怎么宣告我们的 `ZipList a` 的，一种方式是像这样：
+
+```
+data ZipList a = ZipList [a]
+```
+
+也就是一个只有一个值构造子的型别而且那个构造子里面只有一个字段。我们也可以用 record syntax 来定义一个解开的函数：
+
+```
+data ZipList a = ZipList { getZipList :: [a] }
+```
+
+这样听起来不错。这样我们就有两种方式来让一个型别来表现一个 typeclass，我们可以用 `data` 关键字来把一个型别包在另一个里面，然后再将他定义成第二种表现方式。
+
+而在 Haskell 中 `newtype` 正是为了这种情形，我们想将一个型别包在另一个型别中。在实际的函式库中 `ZipList a` 是这样定义了：
+
+```
+newtype ZipList a = ZipList { getZipList :: [a] }
+```
+
+这边我们不用 `data` 关键字反而是用 `newtype` 关键字。这是为什么呢？
+
+第一个理由是 `newtype` 比较快速。如果你用 `data` 关键字来包一个型别的话，在你执行的时候会有一些包起来跟解开来的成本。但如果你用 `newtype` 的话，Haskell 会知道你只是要将一个现有的型别包成一个新的型别，你想要内部运作完全一样但只是要一个全新的型别而已。有了这个概念，Haskell 可以将包裹跟解开来的成本都去除掉。
+
+那为什么我们不是一直使用 `newtype` 呢？
+
+当你用 `newtype` 来制作一个新的型别时，你只能定义**<u>单一一个值构造子</u>**，而且那个构造子只能有一个字段。但使用 `data` 的话，你可以让那个型别有好几个值构造子，并且每个构造子可以有零个或多个字段。
+
+> 道理类似于: 用 newtype 定义的 class 只能有一个 member, 而用 data 定义的 class 会有多个 member
+
+对于 `newtype` 我们也能使用 `deriving` 关键字。我们可以 derive 像是 `Eq`, `Ord`, `Enum`, `Bounded`, `Show` 跟 `Read` 的 instance。如果我们想要对新的型别做 derive，那原本的型别必须已经在那个 typeclass 中。这样很合理，毕竟 `newtype` 就是要将现有的型别包起来。如果我们按照下面的方式定义的话，我们就能对我们的型别做印出以及比较相等性的操作：
+
+```
+newtype CharList = CharList { getCharList :: [Char] } deriving (Eq, Show)
+```
+
+我们来跑跑看：
+
+```
+ghci> CharList "this will be shown!"  
+CharList {getCharList = "this will be shown!"}  
+ghci> CharList "benny" == CharList "benny"  
+True  
+ghci> CharList "benny" == CharList "oisters"  
+False
+```
+
+##### On newtype laziness
+
+我们提到 `newtype` 一般来讲比 `data` 来得有效率。`newtype` 能做的唯一一件事就是将现有的型别包成新的型别。这样 Haskell 在内部就能将新的型别的值用旧的方式来操作。只是要记住他们还是不同的型别。这代表 `newtype` 并不只是有效率，他也具备 lazy 的特性。我们来说明一下这是什么意思。
+
+就像我们之前说得，Haskell 缺省是具备 lazy 的特性，这代表只有当我们要将函数的结果印出来的时候计算才会发生。或者说，只有当我们真的需要结果的时候计算才会发生。在 Haskell 中 `undefined` 代表会造成错误的计算。如果我们试着计算他，也就是将他印到终端中，Haskell 会丢出错误。
+
+```
+ghci> undefined  
+*** Exception: Prelude.undefined
+```
+
+然而，如果我们做一个 list，其中包含一些 `undefined` 的值，但却要求一个不是 `undefined` 的 head，那一切都会顺利地被计算，因为 Haskell 并不需要 list 中其他元素来得到结果。我们仅仅需要看到第一个元素而已。
+
+```
+ghci> head [3,4,5,undefined,2,undefined]  
+3
+```
+
+现在们考虑下面的型别：
+
+```
+data CoolBool = CoolBool { getCoolBool :: Bool }
+```
+
+这是一个用 `data` 关键字定义的 algebraic data type。他有一个值建构子并只有一个型别为 `Bool` 的字段。我们写一个函数来对 `CoolBool` 做模式匹配，并回传一个 `"hello"` 的值。他并不会管 `CoolBool` 中装的究竟是 `True` 或 `False`。
+
+```
+Prelude> helloMe undefined
+"*** Exception: Prelude.undefined  "
+```
+
+结果收到了一个 Exception。是什么造成这个 Exception 的呢？用 `data` 定义的型别可以有好几个值构造子（尽管 `CoolBool` 只有一个）所以当我们要看看喂给函数的值是否是 `(CoolBool _)` 的形式，Haskell 会需要做一些基本的计算来看看是哪个值构造子被用到。但当我们计算 `undefined` 的时候，就算是一点也会丢出 Exception。
+
+我们不用 `data` 来定义 `CoolBool` 而用 `newtype`：
+
+```
+newtype CoolBool = CoolBool { getCoolBool :: Bool }
+```
+
+我们再来将 `undefined` 喂给 `helloMe`。
+
+```
+ghci> helloMe undefined  
+"hello"
+```
+
+居然正常运作！为什么呢？正如我们说过得，当我们使用 `newtype` 的时候，Haskell 内部可以将新的型别用旧的型别来表示。他不必加入另一层 box 来包住旧有的型别。他只要注意他是不同的型别就好了。而且 Haskell 会知道 `newtype` 定义的型别一定只会有一个构造子，他不必计算喂给函数的值就能确定他是 `(CoolBool _)` 的形式，因为 `newtype` 只有一个可能的值跟单一字段！
+
+##### type vs newtype vs data
+
+到目前为止，你也许对于 `type`,`data` 跟 `newtype` 之间的差异还不是很了解，让我们快速复习一遍。
+
+`type` 关键字是让我们定义 type synonyms。他代表我们只是要给一个现有的型别另一个名字，假设我们这样做：
+
+```
+type IntList = [Int]
+```
+
+这样做可以允许我们用 `IntList` 的名称来指称 `[Int]`。我们可以交换地使用他们。但我们并不会因此有一个 `IntList` 的值构造子。因为 `[Int]` 跟 `IntList` 只是两种指称同一个型别的方式。我们在指称的时候用哪一个并无所谓。
+
+```
+ghci> ([1,2,3] :: IntList) ++ ([1,2,3] :: [Int])  
+[1,2,3,1,2,3]
+```
+
+当我们想要让 type signature 更清楚一些，给予我们更了解函数的 context 的时候，我们会定义 type synonyms。举例来说，当我们用一个型别为 `[(String,String)]` 的 association list 来代表一个电话簿的时候，我们可以定义一个 `PhoneBook` 的 type synonym，这样 type signature 会比较容易读。
+
+`newtype` 关键字将现有的型别包成一个新的型别，大部分是为了要让他们可以是特定 typeclass 的 instance 而这样做。当我们使用 `newtype` 来包裹一个现有的型别时，这个型别跟原有的型别是分开的。如果我们将下面的型别用 `newtype` 定义：
+
+```
+newtype CharList = CharList { getCharList :: [Char] }
+```
+
+我们不能用 `++` 来将 `CharList` 跟 `[Char]` 接在一起。我们也不能用 `++` 来将两个 `CharList` 接在一起，因为 `++` 只能套用在 list 上，而 `CharList` 并不是 list，尽管你会说他包含一个 list。但我们可以将两个 `CharList` 转成 list，将他们 `++` 然后再转回 `CharList`。
+
+当我们在 `newtype` 宣告中使用 record syntax 的时候，我们会得到将新的型别转成旧的型别的函数，也就是我们 `newtype` 的值构造子，以及一个函数将他的字段取出。新的型别并不会被自动定义成原有型别所属的 typeclass 的一个 instance，所以我们必须自己来 derive 他们。
+
+实际上你可以将 `newtype` 想成是只能定义一个构造子跟一个字段的 `data` 宣告。如果你碰到这种情形，可以考虑使用 `newtype`。
+
+使用 `data` 关键字是为了定义自己的型别。他们可以在 algebraic data type 中放任意数量的构造子跟字段。可以定义的东西从 list, `Maybe` 到 tree。
+
+如果你只是希望你的 type signature 看起来比较干净，你可以只需要 type synonym。如果你想要将现有的型别包起来并定义成一个 type class 的 instance，你可以尝试使用 newtype。如果你想要定义完全新的型别，那你应该使用 `data` 关键字。
+
+#### Monoid
+
+Monoid 也是一个 typeclass
+
+考虑 `*` 是一个将两个数值相乘的一个函数。如果我们将一个数值乘上 `1`，那就会得到自身的数值。我们实际上是做 `1 * x` 或 `x * 1` 并没有差别。结果永远会是 `x`。同样的，`++` 是一个接受两个参数并回传新的值的一个函数。只是他不是相乘而是将两个 list 接在一起。而类似 `*`，他也有一个特定的值，当他跟其他值使用 `++` 时会得到同样的值。那个值就是空的 list `[]`。
+
+```
+ghci> 4 * 1  
+4  
+ghci> 1 * 9  
+9  
+ghci> [1,2,3] ++ []  
+[1,2,3]  
+ghci> [] ++ [0.5, 2.5]  
+[0.5,2.5]
+```
+
+看起来 `*` 之于 `1` 跟 `++` 之于 `[]` 有类似的性质：
+
++ 函数同样接受两个参数
++ 参数跟回传值是同样的型别
+
++ 同样存在某些值当套用二元函数时并不会改变其他值
+
+关于这两种操作还有另一个比较难察觉的性质就是，当我们对这个二元函数对三个以上的值操作并化简，函数套用的顺序并不会影响到结果。不论是 `(3 * 4) * 5` 或是 `3 * (4 * 5)`，两种方式都会得到 `60`。而 `++` 也是相同的。我们称呼这样的性质为结合律(associativity)。`*` 遵守结合律，`++` 也是。但 `-` 就不遵守。`(5 - 3) - 4` 跟 `5 - (3 - 4)` 得到的结果是不同的。
+
+一个 monoid 是你有一个遵守结合律的二元函数还有一个可以相对于那个函数作为 identity 的值。当某个值相对于一个函数是一个 identity，他表示当我们将这个值丢给函数时，结果永远会是另外一边的那个值本身。`1` 是相对于 `*` 的 identity，而 `[]` 是相对于 `++` 的 identity。在 Haskell 中还有许多其他的 monoid，这也是为什么我们定义了 `Monoid` 这个 typeclass。他描述了表现成 monoid 的那些型别。我们来看看这个 typeclass 是怎么被定义的：
+
+```
+class Monoid m where  
+    mempty :: m  
+    mappend :: m -> m -> m  
+    mconcat :: [m] -> m  
+    mconcat = foldr mappend mempty
+```
+
+首先我们看到只有具体型别才能定义成 `Monoid` 的 instance。由于在 typeclass 定义中的 `m` 并不接受任何型别参数。这跟 `Functor` 以及 `Applicative` 不同，他们要求他们的 instance 必须是一个接受单一型别参数的型别构造子。
+
+第一个函数是 `mempty`，由于他不接受任何参数，所以他并不是一个函数，而是一个 polymorphic 的常数。有点像是 `Bounded` 中的 `minBound` 一样。`mempty` 表示一个特定 monoid 的 identity。
+
+再来我们看到 `mappend`，你可能已经猜到，他是一个接受两个相同型别的值的二元函数，并回传同样的型别。不过要注意的是他的名字不太符合他真正的意思，他的名字隐含了我们要将两个东西接在一起。尽管在 list 的情况下 `++` 的确将两个 list 接起来，但 `*` 则否。他只不过将两个数值做相乘。当我们再看到其他 `Monoid` 的 instance 时，我们会看到他们大部分都没有接起来的做，所以不要用接起来的概念来想像 `mappend`，只要想像他们是接受两个 monoid 的值并回传另外一个就好了。
+
+在 typeclass 定义中的最后一个函数是 `mconcat`。他接受一串 monoid 值，并将他们用 `mappend` 简化成单一的值。他有一个缺省的实作，就是从 `mempty` 作为起始值，然后用 `mappend` 来 fold。由于对于大部分的 instance 缺省的实作就没什么问题，我们不会想要实作自己的 `mconcat`。当我们定义一个型别属于 `Monoid` 的时候，多半实作 `mempty` 跟 `mappend` 就可以了。而 `mconcat` 就是因为对于一些 instance，有可能有比较有效率的方式来实作 `mconcat`。不过大多数情况都不需要。
+
+##### monoid law
+
++ `mempty `mappend` x = x`
++ `x `mappend` mempty = x`
++ `(x `mappend` y) `mappend` z = x `mappend` (y `mappend` z)`
+
+##### Lists are monoids
+
+没错，list 是一种 monoid。正如我们先前看到的，`++` 跟空的 list `[]` 共同形成了一个 monoid。他的 instance 很简单：
+
+
+
+```
+instance Monoid [a] where  
+    mempty = []  
+    mappend = (++)
+```
+
+list 是 `Monoid` typeclass 的一个 instance，这跟他们装的元素的型别无关。注意到我们写 `instance Monoid [a]` 而非 `instance Monoid []`，这是因为 `Monoid` 要求 instance 必须是具体型别
+
+```
+ghci> [1,2,3] `mappend` [4,5,6]  
+[1,2,3,4,5,6]  
+ghci> ("one" `mappend` "two") `mappend` "tree"  
+"onetwotree"  
+ghci> "one" `mappend` ("two" `mappend` "tree")  
+"onetwotree"  
+ghci> "one" `mappend` "two" `mappend` "tree"  
+"onetwotree"  
+ghci> "pang" `mappend` mempty  
+"pang"  
+ghci> mconcat [[1,2],[3,6],[9]]  
+[1,2,3,6,9]  
+ghci> mempty :: [a]  
+[]
+```
+
+注意到最后一行我们明白地标记出型别。这是因为如果只些 `mempty` 的话，GHCi 不会知道他是哪一个 instance 的 `mempty`，所以我们必须清楚说出他是 list instance 的 mempty。我们可以使用一般化的型别 `[a]`，因为空的 list 可以看作是属于任何型别。
+
+##### Product and Sum
+
+我们已经描述过将数值表现成一种 monoid 的方式。只要将 `*` 当作二元函数而 `1` 当作 identity 就好了。而且这不是唯一一种方式，另一种方式是将 `+` 作为二元函数而 `0` 作为 identity。
+
+他也遵守 monoid law，因为将 0 加上其他数值，都会是另外一者。而且加法也遵守结合律。所以现在我们有两种方式来将数值表现成 monoid，那要选哪一个呢？其实我们不必要强迫定下来，还记得当同一种型别有好几种表现成某个 typeclass 的方式时，我们可以用 `newtype` 来包裹现有的型别，然后再定义新的 instance。这样就行了。
+
+`Data.Monoid` 这个模块导出了两种型别，`Product` 跟 `Sum`。`Product` 定义如下：
+
+```
+newtype Product a =  Product { getProduct :: a }  
+    deriving (Eq, Ord, Read, Show, Bounded)
+```
+
+简单易懂，就是一个单一型别参数的 `newtype`，并 derive 一些性质。他的 `Monoid` 的 instance 长得像这样：
+
+```
+instance Num a => Monoid (Product a) where  
+    mempty = Product 1  
+    Product x `mappend` Product y = Product (x * y)
+```
+
+`mempty` 只不过是将 `1` 包在 `Product` 中。`mappend` 则对 `Product` 的构造子做模式匹配，将两个取出的数值相乘后再将结果放回去。就如你看到的，typeclass 定义前面有 `Num a` 的条件限制。所以他代表 `Product a` 对于所有属于 `Num` 的 `a` 是一个 `Monoid`。要将 `Product a` 作为一个 monoid 使用，我们需要用 newtype 来做包裹跟解开的动作。
+
+```
+ghci> getProduct $ Product 3 `mappend` Product 9  
+27  
+ghci> getProduct $ Product 3 `mappend` mempty  
+3  
+ghci> getProduct $ Product 3 `mappend` Product 4 `mappend` Product 2  
+24  
+ghci> getProduct . mconcat . map Product $ [3,4,2]  
+24
+```
+
+`Sum` 跟 `Product` 定义的方式类似，我们也可以用类似的方式操作：
+
+```
+ghci> getSum $ Sum 2 `mappend` Sum 9  
+11  
+ghci> getSum $ mempty `mappend` Sum 3  
+3  
+ghci> getSum . mconcat . map Sum $ [1,2,3]  
+6
+```
+
+##### Any and ALL
+
+另一种可以有两种表示成 monoid 方式的型别是 `Bool`。第一种方式是将 `||` 当作二元函数，而 `False` 作为 identity。这样的意思是只要有任何一个参数是 `True` 他就回传 `True`，否则回传 `False`。所以如果我们使用 `False` 作为 identity，他会在跟 `False` 做 OR 时回传 `False`，跟 `True` 做 OR 时回传 `True`。`Any` 这个 newtype 是 `Monoid` 的一个 instance，并定义如下：
+
+```
+newtype Any = Any { getAny :: Bool }  
+    deriving (Eq, Ord, Read, Show, Bounded)
+```
+
+他的 instance 长得像这样：
+
+```
+instance Monoid Any where  
+    mempty = Any False  
+    Any x `mappend` Any y = Any (x || y)
+```
+
+他叫做 `Any` 的理由是 `x `mappend` y` 当有任何一个是 `True` 时就会是 `True`。就算是更多个用 `mappend` 串起来的 `Any`，他也会在任何一个是 `True` 回传 `True`。
+
+
+
+```
+ghci> getAny $ Any True `mappend` Any False  
+True  
+ghci> getAny $ mempty `mappend` Any True  
+True  
+ghci> getAny . mconcat . map Any $ [False, False, False, True]  
+True  
+ghci> getAny $ mempty `mappend` mempty  
+False
+```
+
+另一种 `Bool` 表现成 `Monoid` 的方式是用 `&&` 作为二元函数，而 `True` 作为 identity。只有当所有都是 `True` 的时候才会回传 `True`。下面是他的 newtype 定义：
+
+
+
+```
+newtype All = All { getAll :: Bool }  
+        deriving (Eq, Ord, Read, Show, Bounded)
+```
+
+而这是他的 instance：
+
+```
+instance Monoid All where  
+        mempty = All True  
+        All x `mappend` All y = All (x && y)
+```
+
+当我们用 `mappend` 来串起 `All` 型别的值时，结果只有当所有 `mappend` 的值是 `True` 时才会是 `True`：
+
+```
+ghci> getAll $ mempty `mappend` All True  
+True  
+ghci> getAll $ mempty `mappend` All False  
+False  
+ghci> getAll . mconcat . map All $ [True, True, True]  
+True  
+ghci> getAll . mconcat . map All $ [True, True, False]  
+False
+```
+
+就如乘法跟加法一样，我们通常宁愿用二元函数来操作他们也不会用 newtype 来将他们包起来。不会将他们包成 `Any` 或 `All` 然后用 `mappend`，`mempty` 或 `mconcat` 来操作。通常使用 `or` 跟 `and`，他们接受一串 `Bool`，并只有当任意一个或是所有都是 `True` 的时候才回传 `True`。
+
+##### The Ordering monoid
+
+还记得 `Ordering` 型别吗?他是比较运算之后得到的结果，包含三个值：`LT`，`EQ` 跟 `GT`，分别代表小于，等于跟大于：
+
+```
+ghci> 1 `compare` 2  
+LT  
+ghci> 2 `compare` 2  
+EQ  
+ghci> 3 `compare` 2  
+GT
+```
+
+针对 list，数值跟布林值而言，要找出 monoid 的行为只要去查看已经定义的函数，然后看看有没有展现出 monoid 的特性就可以了，但对于 `Ordering`，我们就必须要更仔细一点才能看出来是否是一个 monoid，但其实他的 `Monoid` instance 还蛮直觉的：
+
+```
+instance Monoid Ordering where  
+    mempty = EQ  
+    LT `mappend` _ = LT  
+    EQ `mappend` y = y  
+    GT `mappend` _ = GT
+```
+
+这个 instance 定义如下：当我们用 `mappend` 两个 `Ordering` 型别的值时，左边的会被保留下来。除非左边的值是 `EQ`，那我们就会保留右边的当作结果。而 identity 就是 `EQ`。乍看之下有点随便，但实际上他是我们比较两个英文本时所用的方法。我们先比较两个字母是否相等，如果他们不一样，那我们就知道那一个字在字典中会在前面。而如果两个字母相等，那我们就继续比较下一个字母，以此类推。
+
+举例来说，如果我们字典顺序地比较 `"ox"` 跟 `"on"` 的话。我们会先比较两个字的首个字母，看看他们是否相等，然后继续比较第二个字母。我们看到 `'x'` 是比 `'n'` 要来得大，所以我们就知道如何比较两个字了。而要了解为何 `EQ` 是 identity，我们可以注意到如果我们在两个字中间的同样位置塞入同样的字母，那他们之间的字典顺序并不会改变。`"oix"` 仍然比 `"oin"` 要大。
+
+很重要的一件事是在 `Ordering` 的 `Monoid` 定义里 `x `mappend` y` 并不等于 `y `mappend` x`。因为除非第一个参数是 `EQ`，不然结果就会是第一个参数。所以 `LT `mappend` GT` 等于 `LT`，然而 `GT `mappend` LT` 等于 `GT`。
+
+```
+ghci> LT `mappend` GT  
+LT  
+ghci> GT `mappend` LT  
+GT  
+ghci> mempty `mappend` LT  
+LT  
+ghci> mempty `mappend` GT  
+GT
+```
+
+所以这个 monoid 在什么情况下会有用呢？假设你要写一个比较两个字串长度的函数，并回传 `Ordering`。而且当字串一样长的时候，我们不直接回传 `EQ`，反而继续用字典顺序比较他们。一种实作的方式如下：
+
+```
+lengthCompare :: String -> String -> Ordering  
+lengthCompare x y = let a = length x `compare` length y   
+                        b = x `compare` y  
+                    in  if a == EQ then b else a
+```
+
+我们称呼比较长度的结果为 `a`，而比较字典顺序的结果为 `b`，而当长度一样时，我们就回传字典顺序。
+
+如果善用我们 `Ordering` 是一种 monoid 这项知识，我们可以把我们的函数写得更简单些：
+
+```
+import Data.Monoid
+
+
+lengthCompare :: String -> String -> Ordering  
+lengthCompare x y = (length x `compare` length y) `mappend`  
+                    (x `compare` y)
+```
+
+我们可以试着跑跑看：
+
+```
+ghci> lengthCompare "zen" "ants"  
+LT  
+ghci> lengthCompare "zen" "ant"  
+GT
+```
+
+##### Maybe the monoid
+
+将 Maybe 表现成 Monoid 的两种方式
+
+一种将 `Maybe a` 当作 monoid 的方式就是他的 `a` 也是一个 monoid，而我们将 `mappend` 实作成使用包在 `Just` 里面的值对应的 `mappend`。并且用 `Nothing` 当作 identity。所以如果我 `mappend` 两个参数中有一个是 `Nothing`。那结果就会是另一边的值。他的 instance 定义如下：
+
+```
+instance Monoid a => Monoid (Maybe a) where  
+    mempty = Nothing  
+    Nothing `mappend` m = m  
+    m `mappend` Nothing = m  
+    Just m1 `mappend` Just m2 = Just (m1 `mappend` m2)
+```
+
+但如果在 `Maybe` 中的型别不是 `Monoid` 呢？注意到在先前的 instance 定义中，唯一有依赖于 monoid 限制的情况就是在 `mappend` 两个 `Just` 的时候。但如果我们不知道包在 `Just` 里面的值究竟是不是 monoid，我们根本无法用 `mappend` 操作他们，所以该怎么办呢？一种方式就是直接丢掉第二个值而留下第一个值。这就是 `First a` 存在的目的，而这是他的定义：
+
+```
+newtype First a = First { getFirst :: Maybe a }  
+    deriving (Eq, Ord, Read, Show)
+```
+
+我们接受一个 `Maybe a` 并把他包成 newtype，`Monoid` 的定义如下：
+
+```
+instance Monoid (First a) where  
+    mempty = First Nothing  
+    First (Just x) `mappend` _ = First (Just x)  
+    First Nothing `mappend` x = x
+```
+
+正如我们说过得，`mempty` 就是包在 `First` 中的 `Nothing`。如果 `mappend` 的第一个参数是 `Just`，我们就直接忽略第二个参数。如果第一个参数是 `Nothing`，那我们就将第二个参数当作结果。并不管他究竟是 `Just` 或是 `Nothing`。
+
+##### Foldable
+
+由于有太多种数据结构可以 fold 了，所以我们定义了 `Foldable` 这个 typeclass。就像 `Functor` 是定义可以 map over 的结构。`Foldable` 是定义可以 fold 的结构。在 `Data.Foldable` 中有定义了一些有用的函数，但他们名称跟 `Prelude` 中的名称冲突。所以最好是用 qualified 的方式 import 他们：
+
+```
+import qualified Foldable as F
+```
+
+为了少打一些字，我们将他们 import qualified 成 `F`。所以这个 typeclass 中定义了哪些函数呢？有 `foldr`，`foldl`，`foldr1` 跟 `foldl1`。你会说我们已经知道这些函数了，他们有什么不一样的地方吗？我们来比较一下 `Foldable` 中的 `foldr` 跟 `Prelude` 中的 `foldr` 的型别异同：
+
+```
+ghci> :t foldr  
+foldr :: (a -> b -> b) -> b -> [a] -> b  
+ghci> :t F.foldr  
+F.foldr :: (F.Foldable t) => (a -> b -> b) -> b -> t a -> b
+```
+
+尽管 `foldr` 接受一个 list 并将他 fold 起来，`Data.Foldable` 中的 `foldr` 接受任何可以 fold 的型别。并不只是 list。 而两个 `foldr` 对于 list 的结果是相同的：
+
+```
+ghci> foldr (*) 1 [1,2,3]  
+6  
+ghci> F.foldr (*) 1 [1,2,3]  
+6
+```
+
+要定义成 `Foldable` 的一种方式就是实作 `foldr`。但另一种比较简单的方式就是实作 `foldMap`，他也属于 `Foldable` typeclass。`foldMap` 的型别如下：
+
+```
+foldMap :: (Monoid m, Foldable t) => (a -> m) -> t a -> m
+```
+
+第一个参数是一个函数，这个函数接受 foldable 数据结构中包含的元素的型别，并回传一个 monoid。他第二个参数是一个 foldable 的结构，并包含型别 `a` 的元素。他将第一个函数来 map over 这个 foldable 的结构，因此得到一个包含 monoid 的 foldable 结构。然后用 `mappend` 来简化这些 monoid，最后得到单一的一个 monoid。这个函数听起来不太容易理解，但我们下面会看到他其实很容易实作。而且好消息是只要实作了这个函数就可以让我们的函数成为 `Foldable`。所以我们只要实作某个型别的 `foldMap`，我们就可以得到那个型别的 `foldr` 跟 `foldl`。
+
+## 标准库函数
 
 ###### succ / pred
 
