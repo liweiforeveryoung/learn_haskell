@@ -1512,6 +1512,10 @@ sum (replicate 5 (max 6.7 8.9))
 sum . replicate 5 . max 6.7 $ 8.9
 ```
 
+###### appilication operator `$`  && function composition 
+
+https://nanxiao.me/en/differentiate-application-operator-and-function-composition-in-haskell/
+
 ### Modules
 
 Haskell 中的模块是含有一组相关的函数，型别和型别类的组合。而 Haskell 进程的本质便是从主模块中引用其它模块并调用其中的函数来执行操作。
@@ -4995,6 +4999,70 @@ foldMap :: (Monoid m, Foldable t) => (a -> m) -> t a -> m
 ```
 
 第一个参数是一个函数，这个函数接受 foldable 数据结构中包含的元素的型别，并回传一个 monoid。他第二个参数是一个 foldable 的结构，并包含型别 `a` 的元素。他将第一个函数来 map over 这个 foldable 的结构，因此得到一个包含 monoid 的 foldable 结构。然后用 `mappend` 来简化这些 monoid，最后得到单一的一个 monoid。这个函数听起来不太容易理解，但我们下面会看到他其实很容易实作。而且好消息是只要实作了这个函数就可以让我们的函数成为 `Foldable`。所以我们只要实作某个型别的 `foldMap`，我们就可以得到那个型别的 `foldr` 跟 `foldl`。
+
+## 实战
+
+## Json
+
+demo1
+
+```
+module SimpleJson where
+
+import Data.List (intercalate)
+
+data JValue
+  = JString String
+  | JNumber Double
+  | JBool Bool
+  | JNull
+  | JObject [(String, JValue)]
+  | JArray [JValue]
+  deriving (Eq, Ord, Show)
+
+getString :: JValue -> Maybe String
+getString (JString s) = Just s
+getString _ = Nothing
+
+getInt :: Integral a => JValue -> Maybe a
+getInt (JNumber n) = Just (truncate n)
+getInt _ = Nothing
+
+getDouble :: JValue -> Maybe Double
+getDouble (JNumber n) = Just n
+getDouble _ = Nothing
+
+getBool :: JValue -> Maybe Bool
+getBool (JBool b) = Just b
+getBool _ = Nothing
+
+getObject :: JValue -> Maybe [(String, JValue)]
+getObject (JObject o) = Just o
+getObject _ = Nothing
+
+getArray :: JValue -> Maybe [JValue]
+getArray (JArray a) = Just a
+getArray _ = Nothing
+
+isNull :: JValue -> Bool
+isNull v = v == JNull
+
+renderJValue :: JValue -> String
+renderJValue (JBool True) = "true"
+renderJValue (JBool False) = "false"
+renderJValue JNull = "null"
+renderJValue (JObject o) = "{" ++ renderPairs o ++ "}"
+  where
+    renderPairs pairs = intercalate "," $ map renderPair pairs
+    renderPair (first, second) = first ++ ":" ++ renderJValue second
+renderJValue (JArray array) = "[" ++ renderArray array ++ "]"
+  where
+    renderArray array = intercalate "," $ map renderJValue array
+renderJValue (JString a) = show a
+renderJValue (JNumber a) = show a
+```
+
+
 
 ## 标准库函数
 
